@@ -777,6 +777,7 @@ u64 hrtimer_forward(struct hrtimer *timer, ktime_t now, ktime_t interval)
 	}
 	hrtimer_add_expires(timer, interval);
 
+
 	return orun;
 }
 EXPORT_SYMBOL_GPL(hrtimer_forward);
@@ -924,6 +925,7 @@ int __hrtimer_start_range_ns(struct hrtimer *timer, ktime_t tim,
 	}
 
 	hrtimer_set_expires_range_ns(timer, tim, delta_ns);
+
 
 	timer_stats_hrtimer_set_start_info(timer);
 
@@ -1264,6 +1266,7 @@ void hrtimer_interrupt(struct clock_event_device *dev)
 				break;
 			}
 
+
 			__run_hrtimer(timer);
 		}
 		spin_unlock(&cpu_base->lock);
@@ -1381,7 +1384,6 @@ void hrtimer_run_queues(void)
 			if (base->softirq_time.tv64 <=
 					hrtimer_get_expires_tv64(timer))
 				break;
-
 			__run_hrtimer(timer);
 		}
 		spin_unlock(&cpu_base->lock);
@@ -1399,7 +1401,9 @@ static enum hrtimer_restart hrtimer_wakeup(struct hrtimer *timer)
 
 	t->task = NULL;
 	if (task)
+    {
 		wake_up_process(task);
+    }
 
 	return HRTIMER_NORESTART;
 }

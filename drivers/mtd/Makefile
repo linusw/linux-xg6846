@@ -31,4 +31,7 @@ inftl-objs		:= inftlcore.o inftlmount.o
 
 obj-y		+= chips/ lpddr/ maps/ devices/ nand/ onenand/ tests/
 
+# CONFIG_MIPS_BRCM Begin Broadcom changed code.
+obj-$(CONFIG_MTD_BRCMNAND)	+= brcmnand/
 obj-$(CONFIG_MTD_UBI)		+= ubi/
+# CONFIG_MIPS_BRCM End Broadcom changed code.

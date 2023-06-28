@@ -24,6 +24,11 @@
 #include <asm/unaligned.h>
 #include "br_private.h"
 
+#if defined(CONFIG_MIPS_BRCM)
+#include "br_igmp.h"
+#include <linux/blog.h>
+#endif
+
 static struct kmem_cache *br_fdb_cache __read_mostly;
 static int fdb_insert(struct net_bridge *br, struct net_bridge_port *source,
 		      const unsigned char *addr);
@@ -54,13 +59,21 @@ void br_fdb_fini(void)
  */
 static inline unsigned long hold_time(const struct net_bridge *br)
 {
+#if defined(CONFIG_MIPS_BRCM)
+	/* Seems one timer constant in bridge code can serve several different purposes. As we use forward_delay=0,
+	if the code left unchanged, every entry in fdb will expire immidately after a topology change and every packet
+	will flood the local ports for a period of bridge_max_age. This will result in low throughput after boot up. 
+	So we decoulpe this timer from forward_delay. */
+	return br->topology_change ? (15*HZ) : br->ageing_time;
+#else
 	return br->topology_change ? br->forward_delay : br->ageing_time;
+#endif
 }
 
 static inline int has_expired(const struct net_bridge *br,
 				  const struct net_bridge_fdb_entry *fdb)
 {
-	return !fdb->is_static
+	return !fdb->is_static 
 		&& time_before_eq(fdb->ageing_timer + hold_time(br), jiffies);
 }
 
@@ -71,9 +84,20 @@ static inline int br_mac_hash(const unsigned char *mac)
 	return jhash_1word(key, fdb_salt) & (BR_HASH_SIZE - 1);
 }
 
+#if defined(CONFIG_MIPS_BRCM)
+static inline void fdb_delete(struct net_bridge *br, 
+	                          struct net_bridge_fdb_entry *f)
+#else
 static inline void fdb_delete(struct net_bridge_fdb_entry *f)
+#endif /* CONFIG_MIPS_BRCM */
 {
+#if defined(CONFIG_MIPS_BRCM)
+	br->num_fdb_entries--;
+#endif /* CONFIG_MIPS_BRCM */
 	hlist_del_rcu(&f->hlist);
+#if defined(CONFIG_MIPS_BRCM) && defined(CONFIG_BLOG)
+	blog_notify(DESTROY_BRIDGEFDB, (void*)f, 0, 0);
+#endif
 	br_fdb_put(f);
 }
 
@@ -81,7 +105,7 @@ void br_fdb_changeaddr(struct net_bridge_port *p, const unsigned char *newaddr)
 {
 	struct net_bridge *br = p->br;
 	int i;
-
+	
 	spin_lock_bh(&br->hash_lock);
 
 	/* Search all chains since old address/hash is unknown */
@@ -95,7 +119,7 @@ void br_fdb_changeaddr(struct net_bridge_port *p, const unsigned char *newaddr)
 				/* maybe another port has same hw addr? */
 				struct net_bridge_port *op;
 				list_for_each_entry(op, &br->port_list, list) {
-					if (op != p &&
+					if (op != p && 
 					    !compare_ether_addr(op->dev->dev_addr,
 								f->addr.addr)) {
 						f->dst = op;
@@ -104,7 +128,11 @@ void br_fdb_changeaddr(struct net_bridge_port *p, const unsigned char *newaddr)
 				}
 
 				/* delete old one */
+#if defined(CONFIG_MIPS_BRCM)
+				fdb_delete(br, f);
+#else
 				fdb_delete(f);
+#endif /* CONFIG_MIPS_BRCM */
 				goto insert;
 			}
 		}
@@ -134,7 +162,11 @@ void br_fdb_cleanup(unsigned long _data)
 				continue;
 			this_timer = f->ageing_timer + delay;
 			if (time_before_eq(this_timer, jiffies))
+#if defined(CONFIG_MIPS_BRCM)
+				fdb_delete(br, f);
+#else
 				fdb_delete(f);
+#endif /* CONFIG_MIPS_BRCM */
 			else if (time_before(this_timer, next_timer))
 				next_timer = this_timer;
 		}
@@ -157,7 +189,11 @@ void br_fdb_flush(struct net_bridge *br)
 		struct hlist_node *h, *n;
 		hlist_for_each_entry_safe(f, h, n, &br->hash[i], hlist) {
 			if (!f->is_static)
+#if defined(CONFIG_MIPS_BRCM)
+				fdb_delete(br, f);
+#else
 				fdb_delete(f);
+#endif /* CONFIG_MIPS_BRCM */
 		}
 	}
 	spin_unlock_bh(&br->hash_lock);
@@ -175,11 +211,11 @@ void br_fdb_delete_by_port(struct net_bridge *br,
 	spin_lock_bh(&br->hash_lock);
 	for (i = 0; i < BR_HASH_SIZE; i++) {
 		struct hlist_node *h, *g;
-
+		
 		hlist_for_each_safe(h, g, &br->hash[i]) {
 			struct net_bridge_fdb_entry *f
 				= hlist_entry(h, struct net_bridge_fdb_entry, hlist);
-			if (f->dst != p)
+			if (f->dst != p) 
 				continue;
 
 			if (f->is_static && !do_all)
@@ -192,7 +228,7 @@ void br_fdb_delete_by_port(struct net_bridge *br,
 			if (f->is_local) {
 				struct net_bridge_port *op;
 				list_for_each_entry(op, &br->port_list, list) {
-					if (op != p &&
+					if (op != p && 
 					    !compare_ether_addr(op->dev->dev_addr,
 								f->addr.addr)) {
 						f->dst = op;
@@ -200,8 +236,11 @@ void br_fdb_delete_by_port(struct net_bridge *br,
 					}
 				}
 			}
-
+#if defined(CONFIG_MIPS_BRCM)
+			fdb_delete(br, f);
+#else
 			fdb_delete(f);
+#endif /* CONFIG_MIPS_BRCM */
 		skip_delete: ;
 		}
 	}
@@ -227,7 +266,7 @@ struct net_bridge_fdb_entry *__br_fdb_get(struct net_bridge *br,
 }
 
 /* Interface used by ATM hook that keeps a ref count */
-struct net_bridge_fdb_entry *br_fdb_get(struct net_bridge *br,
+struct net_bridge_fdb_entry *br_fdb_get(struct net_bridge *br, 
 					unsigned char *addr)
 {
 	struct net_bridge_fdb_entry *fdb;
@@ -255,7 +294,7 @@ void br_fdb_put(struct net_bridge_fdb_entry *ent)
 }
 
 /*
- * Fill buffer with forwarding table records in
+ * Fill buffer with forwarding table records in 
  * the API format.
  */
 int br_fdb_fillbuf(struct net_bridge *br, void *buf,
@@ -274,7 +313,7 @@ int br_fdb_fillbuf(struct net_bridge *br, void *buf,
 			if (num >= maxnum)
 				goto out;
 
-			if (has_expired(br, f))
+			if (has_expired(br, f)) 
 				continue;
 
 			if (skip) {
@@ -316,12 +355,30 @@ static inline struct net_bridge_fdb_entry *fdb_find(struct hlist_head *head,
 	return NULL;
 }
 
+#if defined(CONFIG_MIPS_BRCM)
+static struct net_bridge_fdb_entry *fdb_create(struct net_bridge *br, 
+					       struct hlist_head *head,
+					       struct net_bridge_port *source,
+					       const unsigned char *addr,
+					       int is_local,
+					       int is_static)
+#else
 static struct net_bridge_fdb_entry *fdb_create(struct hlist_head *head,
 					       struct net_bridge_port *source,
 					       const unsigned char *addr,
 					       int is_local)
+#endif /* CONFIG_MIPS_BRCM */
 {
 	struct net_bridge_fdb_entry *fdb;
+
+#if defined(CONFIG_MIPS_BRCM)
+	if(br->num_fdb_entries >= BR_MAX_FDB_ENTRIES)
+		return NULL;
+
+	/* some users want to always flood. */
+	if (hold_time(br) == 0 && !is_local && !is_static)
+		return NULL;
+#endif
 
 	fdb = kmem_cache_alloc(br_fdb_cache, GFP_ATOMIC);
 	if (fdb) {
@@ -331,11 +388,56 @@ static struct net_bridge_fdb_entry *fdb_create(struct hlist_head *head,
 
 		fdb->dst = source;
 		fdb->is_local = is_local;
+#if defined(CONFIG_MIPS_BRCM)
+		fdb->is_static = is_static;
+#else
 		fdb->is_static = is_local;
+#endif /* CONFIG_MIPS_BRCM */
 		fdb->ageing_timer = jiffies;
+#if defined(CONFIG_MIPS_BRCM)
+		br->num_fdb_entries++;
+#endif /* CONFIG_MIPS_BRCM */
 	}
 	return fdb;
 }
+
+#if defined(CONFIG_MIPS_BRCM)
+static int fdb_adddel_static(struct net_bridge *br,
+                             struct net_bridge_port *source,
+                             const unsigned char *addr, 
+                             int addEntry)
+{
+	struct hlist_head *head;
+	struct net_bridge_fdb_entry *fdb;
+
+	if (!is_valid_ether_addr(addr))
+		return -EINVAL;
+
+	head = &br->hash[br_mac_hash(addr)];
+
+	rcu_read_lock();
+	fdb = fdb_find(head, addr);
+	if (fdb)
+	{
+		/* if the entry exists and it is not static then we will delete it
+		   and then add it back as static. If we are not adding an entry
+		   then just delete it */
+		if ( (0 == addEntry) || (0 == fdb->is_static) )
+		{
+			fdb_delete(br, fdb);
+		}
+	}
+	rcu_read_unlock();
+   
+	if ( 1 == addEntry )
+	{
+		if (!fdb_create(br, head, source, addr, 0, 1))
+			return -ENOMEM;
+	}
+
+	return 0;
+}
+#endif
 
 static int fdb_insert(struct net_bridge *br, struct net_bridge_port *source,
 		  const unsigned char *addr)
@@ -350,17 +452,25 @@ static int fdb_insert(struct net_bridge *br, struct net_bridge_port *source,
 	if (fdb) {
 		/* it is okay to have multiple ports with same
 		 * address, just use the first one.
-		 */
+				 */
 		if (fdb->is_local)
-			return 0;
+					return 0;
 
-		printk(KERN_WARNING "%s adding interface with same address "
-		       "as a received packet\n",
-		       source->dev->name);
+				printk(KERN_WARNING "%s adding interface with same address "
+				       "as a received packet\n",
+				       source->dev->name);
+#if defined(CONFIG_MIPS_BRCM)
+		fdb_delete(br, fdb);
+#else
 		fdb_delete(fdb);
-	}
+#endif /* CONFIG_MIPS_BRCM */
+			}
 
+#if defined(CONFIG_MIPS_BRCM)
+	if (!fdb_create(br, head, source, addr, 1, 1))
+#else
 	if (!fdb_create(head, source, addr, 1))
+#endif /*CONFIG_MIPS_BRCM */
 		return -ENOMEM;
 
 	return 0;
@@ -408,10 +518,41 @@ void br_fdb_update(struct net_bridge *br, struct net_bridge_port *source,
 	} else {
 		spin_lock(&br->hash_lock);
 		if (!fdb_find(head, addr))
+#if defined(CONFIG_MIPS_BRCM)
+			fdb_create(br, head, source, addr, 0, 0);
+#else
 			fdb_create(head, source, addr, 0);
+#endif /*CONFIG_MIPS_BRCM */
 		/* else  we lose race and someone else inserts
 		 * it first, don't bother updating
 		 */
 		spin_unlock(&br->hash_lock);
 	}
 }
+
+#if defined(CONFIG_MIPS_BRCM) && defined(CONFIG_BLOG)
+extern void br_fdb_refresh( struct net_bridge_fdb_entry *fdb );
+void br_fdb_refresh( struct net_bridge_fdb_entry *fdb )
+{
+	fdb->ageing_timer = jiffies;
+	return;
+}
+#endif
+
+
+#if defined(CONFIG_MIPS_BRCM)
+int br_fdb_adddel_static(struct net_bridge *br, struct net_bridge_port *source,
+                         const unsigned char *addr, int bInsert)
+{
+	int ret = 0;
+
+	spin_lock_bh(&br->hash_lock);
+
+	ret = fdb_adddel_static(br, source, addr, bInsert);
+
+	spin_unlock_bh(&br->hash_lock);
+   
+	return ret;
+}
+#endif
+

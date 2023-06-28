@@ -15,6 +15,9 @@
 #include <net/dsfield.h>
 #include <net/inet_ecn.h>
 #include <asm/byteorder.h>
+#if defined(CONFIG_MIPS_BRCM)
+#include <linux/blog.h>
+#endif
 
 /*
  * classid	class		marking
@@ -311,6 +314,9 @@ static struct sk_buff *dsmark_dequeue(struct Qdisc *sch)
 		break;
 	}
 
+#if defined(CONFIG_MIPS_BRCM) && defined(CONFIG_BLOG)
+   blog_skip(skb);
+#endif
 	return skb;
 }
 

@@ -50,6 +50,12 @@
 #include <linux/netfilter_ipv6.h>
 #include <net/ip6_checksum.h>
 
+#if 0
+#if defined(CONFIG_MIPS_BRCM)
+#include <linux/blog.h>
+#endif
+#endif
+
 /* Big lock, protecting vif table, mrt cache and mroute socket state.
    Note that the changes are semaphored via rtnl_lock.
  */
@@ -704,6 +710,30 @@ static int mif6_add(struct net *net, struct mif6ctl *vifc, int mrtsock)
 	return 0;
 }
 
+#if defined(CONFIG_MIPS_BRCM)
+static struct mfc6_cache *ip6mr_cache_find(struct net *net,
+					   struct in6_addr *origin,
+					   struct in6_addr *mcastgrp,
+					   unsigned int ifindex)
+{
+	int line = MFC6_HASH(mcastgrp, origin,ifindex);
+	struct mfc6_cache *c;
+
+	for (c = net->ipv6.mfc6_cache_array[line]; c; c = c->next) {
+		if (ipv6_addr_equal(&c->mf6c_origin, origin) &&
+		    ipv6_addr_equal(&c->mf6c_mcastgrp, mcastgrp))
+			break;
+	}
+
+        if(c == NULL) {
+		for (c = net->ipv6.mfc6_cache_array[line]; c; c = c->next) {
+		    if (ipv6_addr_equal(&c->mf6c_mcastgrp, mcastgrp))
+			break;
+		}
+        }
+	return c;
+}
+#else
 static struct mfc6_cache *ip6mr_cache_find(struct net *net,
 					   struct in6_addr *origin,
 					   struct in6_addr *mcastgrp)
@@ -716,8 +746,10 @@ static struct mfc6_cache *ip6mr_cache_find(struct net *net,
 		    ipv6_addr_equal(&c->mf6c_mcastgrp, mcastgrp))
 			break;
 	}
+
 	return c;
 }
+#endif
 
 /*
  *	Allocate a multicast cache entry
@@ -955,7 +987,11 @@ static int ip6mr_mfc_delete(struct net *net, struct mf6cctl *mfc)
 	int line;
 	struct mfc6_cache *c, **cp;
 
+#if defined(CONFIG_MIPS_BRCM)	
+	line= MFC6_HASH(&mfc->mf6cc_mcastgrp.sin6_addr, &mfc->mf6cc_origin.sin6_addr, mfc->mf6cc_parent);
+#else	
 	line = MFC6_HASH(&mfc->mf6cc_mcastgrp.sin6_addr, &mfc->mf6cc_origin.sin6_addr);
+#endif
 
 	for (cp = &net->ipv6.mfc6_cache_array[line];
 	     (c = *cp) != NULL; cp = &c->next) {
@@ -965,6 +1001,12 @@ static int ip6mr_mfc_delete(struct net *net, struct mf6cctl *mfc)
 			*cp = c->next;
 			write_unlock_bh(&mrt_lock);
 
+#if 0
+#if defined(CONFIG_MIPS_BRCM) && defined(CONFIG_BLOG)
+			blog_notify(MCAST_CONTROL_EVT, (void*)c,
+						BLOG_PARAM1_MCAST_DEL, BLOG_PARAM2_MCAST_IPV6);
+#endif
+#endif
 			ip6mr_cache_free(c);
 			return 0;
 		}
@@ -1108,9 +1150,11 @@ static int ip6mr_mfc_add(struct net *net, struct mf6cctl *mfc, int mrtsock)
 			ttls[i] = 1;
 
 	}
-
+#if defined(CONFIG_MIPS_BRCM)	
+	line= MFC6_HASH(&mfc->mf6cc_mcastgrp.sin6_addr, &mfc->mf6cc_origin.sin6_addr, mfc->mf6cc_parent);
+#else	
 	line = MFC6_HASH(&mfc->mf6cc_mcastgrp.sin6_addr, &mfc->mf6cc_origin.sin6_addr);
-
+#endif
 	for (cp = &net->ipv6.mfc6_cache_array[line];
 	     (c = *cp) != NULL; cp = &c->next) {
 		if (ipv6_addr_equal(&c->mf6c_origin, &mfc->mf6cc_origin.sin6_addr) &&
@@ -1146,6 +1190,13 @@ static int ip6mr_mfc_add(struct net *net, struct mf6cctl *mfc, int mrtsock)
 	c->next = net->ipv6.mfc6_cache_array[line];
 	net->ipv6.mfc6_cache_array[line] = c;
 	write_unlock_bh(&mrt_lock);
+
+#if 0
+#if defined(CONFIG_MIPS_BRCM) && defined(CONFIG_BLOG)
+	blog_notify(MCAST_CONTROL_EVT, (void*)c,
+				BLOG_PARAM1_MCAST_ADD, BLOG_PARAM2_MCAST_IPV6);
+#endif
+#endif
 
 	/*
 	 *	Check to see if we resolved a queued list. If so we
@@ -1437,7 +1488,11 @@ int ip6mr_ioctl(struct sock *sk, int cmd, void __user *arg)
 	struct sioc_sg_req6 sr;
 	struct sioc_mif_req6 vr;
 	struct mif_device *vif;
+#if defined(CONFIG_MIPS_BRCM)
+        struct mfc6_cache *c = NULL;
+#else
 	struct mfc6_cache *c;
+#endif
 	struct net *net = sock_net(sk);
 
 	switch (cmd) {
@@ -1466,7 +1521,11 @@ int ip6mr_ioctl(struct sock *sk, int cmd, void __user *arg)
 			return -EFAULT;
 
 		read_lock(&mrt_lock);
+      #if defined(CONFIG_MIPS_BRCM)			
+		/*c = ip6mr_cache_find(net, &sr.src.sin6_addr, &sr.grp.sin6_addr);*/
+      #else
 		c = ip6mr_cache_find(net, &sr.src.sin6_addr, &sr.grp.sin6_addr);
+      #endif
 		if (c) {
 			sr.pktcnt = c->mfc_un.res.pkt;
 			sr.bytecnt = c->mfc_un.res.bytes;
@@ -1547,7 +1606,9 @@ static int ip6mr_forward2(struct sk_buff *skb, struct mfc6_cache *c, int vifi)
 	 * result in receiving multiple packets.
 	 */
 	dev = vif->dev;
+#if !defined(CONFIG_MIPS_BRCM)
 	skb->dev = dev;
+#endif
 	vif->pkt_out++;
 	vif->bytes_out += skb->len;
 
@@ -1650,11 +1711,29 @@ int ip6_mr_input(struct sk_buff *skb)
 {
 	struct mfc6_cache *cache;
 	struct net *net = dev_net(skb->dev);
+#if defined(CONFIG_MIPS_BRCM)	
+	struct net_device *dev = skb->dev;
+#endif	
 
 	read_lock(&mrt_lock);
+
+#if defined(CONFIG_MIPS_BRCM)
+	/* mroute6 should not apply to MLD traffic
+	   in addition it does not make sense for TCP protocol to be used
+	   for multicast so just check for UDP */
+	if( ipv6_hdr(skb)->nexthdr == IPPROTO_UDP )
+	{
+		cache = ip6mr_cache_find(net, &ipv6_hdr(skb)->saddr, 
+		                         &ipv6_hdr(skb)->daddr, dev->ifindex);
+	}
+	else
+	{
+		cache = NULL;
+	}
+#else
 	cache = ip6mr_cache_find(net,
 				 &ipv6_hdr(skb)->saddr, &ipv6_hdr(skb)->daddr);
-
+#endif
 	/*
 	 *	No usable cache entry
 	 */
@@ -1723,9 +1802,27 @@ int ip6mr_get_route(struct net *net,
 	int err;
 	struct mfc6_cache *cache;
 	struct rt6_info *rt = (struct rt6_info *)skb->dst;
+#if defined(CONFIG_MIPS_BRCM)	
+	struct net_device *dev = skb->dev;
+#endif	
 
 	read_lock(&mrt_lock);
+#if defined(CONFIG_MIPS_BRCM)
+	/* mroute6 should not apply to MLD traffic
+      in addition it does not make sense for TCP protocol to be used
+      for multicast so just check for UDP */
+	if( ipv6_hdr(skb)->nexthdr == IPPROTO_UDP )
+	{
+		cache = ip6mr_cache_find(net, &rt->rt6i_src.addr, 
+		                         &rt->rt6i_dst.addr, dev->ifindex);
+	}
+	else
+	{
+		cache = NULL;
+	}
+#else
 	cache = ip6mr_cache_find(net, &rt->rt6i_src.addr, &rt->rt6i_dst.addr);
+#endif
 
 	if (!cache) {
 		struct sk_buff *skb2;

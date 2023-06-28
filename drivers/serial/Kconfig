@@ -5,6 +5,18 @@
 menu "Serial drivers"
 	depends on HAS_IOMEM
 
+
+config BCM_SERIAL
+	tristate "BCM63XX serial support"
+	select SERIAL_CORE
+    
+config BCM_SERIAL_CONSOLE
+	bool "Console on BCM63XX serial port"
+	depends on BCM_SERIAL=y
+	select SERIAL_CORE_CONSOLE
+# End Broadcom changed code
+
+
 #
 # The new 8250/16550 serial drivers
 config SERIAL_8250

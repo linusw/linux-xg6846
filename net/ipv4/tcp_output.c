@@ -1118,6 +1118,18 @@ static unsigned int tcp_mss_split_point(struct sock *sk, struct sk_buff *skb,
 	if (cwnd_len <= needed)
 		return cwnd_len;
 
+	/* At this point skb->len == skb->data_len if frags are present
+	 * setting the split point to PAGE_SIZE most likely gives us skb's
+	 * with 1 frag, and it will help in sending packet with out linearize 
+	 * using FAP GSO 2BD approach. 
+         */
+#if defined(CONFIG_MIPS_BRCM) && (defined(CONFIG_BCM_FAP) || defined(CONFIG_BCM_FAP_MODULE))
+	if((needed >=PAGE_SIZE) && (skb_shinfo(skb)->nr_frags))
+		return PAGE_SIZE;
+	else if((skb_shinfo(skb)->nr_frags == 1))
+		return needed;
+#endif
+
 	return needed - needed % mss_now;
 }
 

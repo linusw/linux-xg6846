@@ -21,6 +21,12 @@
 
 #include "internal.h"
 
+#if defined(CONFIG_MIPS_BRCM)
+struct proc_dir_entry *proc_brcm;
+extern void proc_brcm_init(struct proc_dir_entry *pentry);
+#endif
+
+
 static int proc_test_super(struct super_block *sb, void *data)
 {
 	return sb->s_fs_info == data;
@@ -135,7 +141,15 @@ void __init proc_root_init(void)
 	proc_device_tree_init();
 #endif
 	proc_mkdir("bus", NULL);
+
+#if defined(CONFIG_MIPS_BRCM)
+	proc_brcm = proc_mkdir("brcm", NULL);
+	proc_brcm_init(proc_brcm);
+#endif
+
 	proc_sys_init();
+
+
 }
 
 static int proc_root_getattr(struct vfsmount *mnt, struct dentry *dentry, struct kstat *stat
@@ -226,3 +240,4 @@ EXPORT_SYMBOL(proc_mkdir);
 EXPORT_SYMBOL(create_proc_entry);
 EXPORT_SYMBOL(proc_create_data);
 EXPORT_SYMBOL(remove_proc_entry);
+

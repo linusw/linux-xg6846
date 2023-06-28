@@ -2,7 +2,10 @@ menu "Core Netfilter Configuration"
 	depends on NET && INET && NETFILTER
 
 config NETFILTER_NETLINK
-	tristate
+	tristate "Netfilter netlink interface"
+	help
+		If this option is enabled, the kernel will include support
+		for the new netfilter netlink interface.
 
 config NETFILTER_NETLINK_QUEUE
 	tristate "Netfilter NFQUEUE over NFNETLINK interface"
@@ -268,6 +271,26 @@ config NF_CONNTRACK_TFTP
 
 	  To compile it as a module, choose M here.  If unsure, say N.
 
+#BRCM begin
+
+config NF_DYNDSCP
+  tristate  "Dynamic DSCP Mangling support "
+  depends on NF_CONNTRACK
+  default n
+  help
+  	This option enables support for dynamic DSCP, i.e tos will be derived from 
+  	tos value of WAN packets of each connection.
+
+config NF_CONNTRACK_RTSP
+	tristate "RTSP protocol support"
+	depends on NF_CONNTRACK
+	help
+	  RTSP (Real Time Streaming Protocol) support.
+
+	  To compile it as a module, choose M here.  If unsure, say N.
+
+#BRCM end
+
 config NF_CT_NETLINK
 	tristate 'Connection tracking netlink interface'
 	select NETFILTER_NETLINK
@@ -526,6 +549,16 @@ config NETFILTER_XT_TARGET_TCPOPTSTRIP
 	help
 	  This option adds a "TCPOPTSTRIP" target, which allows you to strip
 	  TCP options from TCP packets.
+
+config NETFILTER_XT_TARGET_SKIPLOG
+	tristate '"SKIPLOG" target support'
+	depends on NETFILTER_XTABLES && (IPV6 || IPV6=n)
+	---help---
+	  configuration like:
+
+	  iptables -A FORWARD -p tcp -j SKIPLOG
+
+	  To compile it as a module, choose M here.  If unsure, say N.
 
 config NETFILTER_XT_MATCH_CLUSTER
 	tristate '"cluster" match support'

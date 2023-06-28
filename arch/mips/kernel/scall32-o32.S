@@ -38,6 +38,7 @@ NESTED(handle_sys, PT_SIZE, sp)
 	sltiu	t0, v0, __NR_O32_Linux_syscalls + 1
 	addiu	t1, 4			# skip to next instruction
 	sw	t1, PT_EPC(sp)
+
 	beqz	t0, illegal_syscall
 
 	sll	t0, v0, 3
@@ -51,6 +52,7 @@ NESTED(handle_sys, PT_SIZE, sp)
 	bgez	t3, stackargs
 
 stack_done:
+
 	lw	t0, TI_FLAGS($28)	# syscall tracing enabled?
 	li	t1, _TIF_SYSCALL_TRACE | _TIF_SYSCALL_AUDIT
 	and	t0, t1
@@ -67,6 +69,7 @@ stack_done:
 	sw	v0, PT_R0(sp)		# set flag for syscall
 					# restarting
 1:	sw	v0, PT_R2(sp)		# result
+
 
 o32_syscall_exit:
 	local_irq_disable		# make sure need_resched and
@@ -175,6 +178,7 @@ bad_stack:
 	li	t0, 1				# set error flag
 	sw	t0, PT_R7(sp)
 	j	o32_syscall_exit
+
 
 	/*
 	 * The system call does not exist in this kernel

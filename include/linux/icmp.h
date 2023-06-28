@@ -80,7 +80,7 @@ struct icmphdr {
 		__be16	mtu;
 	} frag;
   } un;
-};
+} LINUX_NET_PACKED;
 
 #ifdef __KERNEL__
 #include <linux/skbuff.h>

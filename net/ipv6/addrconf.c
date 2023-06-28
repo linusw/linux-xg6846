@@ -152,6 +152,10 @@ static void inet6_prefix_notify(int event, struct inet6_dev *idev,
 static int ipv6_chk_same_addr(struct net *net, const struct in6_addr *addr,
 			      struct net_device *dev);
 
+#if defined(CONFIG_MIPS_BRCM)
+static struct inet6_dev * ipv6_find_idev(struct net_device *dev);
+#endif
+
 static ATOMIC_NOTIFIER_HEAD(inet6addr_chain);
 
 static struct ipv6_devconf ipv6_devconf __read_mostly = {
@@ -186,7 +190,11 @@ static struct ipv6_devconf ipv6_devconf __read_mostly = {
 	.proxy_ndp		= 0,
 	.accept_source_route	= 0,	/* we do not accept RH0 by default. */
 	.disable_ipv6		= 0,
+#if defined(CONFIG_MIPS_BRCM)
+	.accept_dad		= 2,
+#else
 	.accept_dad		= 1,
+#endif
 };
 
 static struct ipv6_devconf ipv6_devconf_dflt __read_mostly = {
@@ -220,7 +228,11 @@ static struct ipv6_devconf ipv6_devconf_dflt __read_mostly = {
 	.proxy_ndp		= 0,
 	.accept_source_route	= 0,	/* we do not accept RH0 by default. */
 	.disable_ipv6		= 0,
+#if defined(CONFIG_MIPS_BRCM)
+	.accept_dad		= 2,
+#else
 	.accept_dad		= 1,
+#endif
 };
 
 /* IPv6 Wildcard Address and Loopback Address defined by RFC2553 */
@@ -351,6 +363,19 @@ static struct inet6_dev * ipv6_add_dev(struct net_device *dev)
 	memcpy(&ndev->cnf, dev_net(dev)->ipv6.devconf_dflt, sizeof(ndev->cnf));
 	ndev->cnf.mtu6 = dev->mtu;
 	ndev->cnf.sysctl = NULL;
+
+#if defined(CONFIG_MIPS_BRCM)
+	/* 
+	* At bootup time, there is no interfaces attached to brX. Therefore, DAD of
+	* brX cannot take any effect and we cannot pass IPv6 ReadyLogo. We here
+	* increase DAD period of brX to 4 sec which should be long enough for our
+	* system to attach all interfaces to brX. Thus, DAD of brX can send/receive
+	* packets through attached interfaces.
+	*/
+	if ( !strncmp(dev->name, "br", 2) )
+		ndev->cnf.dad_transmits = 4;
+#endif
+
 	ndev->nd_parms = neigh_parms_alloc(dev, &nd_tbl);
 	if (ndev->nd_parms == NULL) {
 		kfree(ndev);
@@ -427,6 +452,15 @@ static struct inet6_dev * ipv6_add_dev(struct net_device *dev)
 	/* Join all-node multicast group */
 	ipv6_dev_mc_inc(dev, &in6addr_linklocal_allnodes);
 
+#if defined(CONFIG_MIPS_BRCM)
+	/* Join all-router multicast group */
+	if (dev && (dev->flags & IFF_MULTICAST)) {
+		struct inet6_dev *idev = ipv6_find_idev(dev);
+
+		if (idev->cnf.forwarding && !(idev->dev->priv_flags & IFF_WANDEV))
+			ipv6_dev_mc_inc(dev, &in6addr_linklocal_allrouters);
+	}
+#endif
 	return ndev;
 }
 
@@ -2374,6 +2408,54 @@ static void addrconf_sit_config(struct net_device *dev)
 }
 #endif
 
+#if defined(CONFIG_MIPS_BRCM)
+static int addrconf_update_lladdr(struct net_device *dev)
+{
+	struct inet6_dev *idev;
+	struct inet6_ifaddr *ifladdr = NULL;
+	struct inet6_ifaddr *ifp;
+	struct in6_addr addr6;
+	int err = -EADDRNOTAVAIL;
+
+	ASSERT_RTNL();
+
+	idev = __in6_dev_get(dev);
+	if (idev != NULL)
+	{
+		read_lock_bh(&idev->lock);
+		for (ifp=idev->addr_list; ifp; ifp=ifp->if_next)
+		{        
+			if (IFA_LINK == ifp->scope)
+			{
+				ifladdr = ifp;
+				in6_ifa_hold(ifp);
+				break;
+			}
+		}
+		read_unlock_bh(&idev->lock);
+
+		if ( ifladdr )
+		{
+			/* delete the address */
+			ipv6_del_addr(ifladdr);
+
+			/* add new LLA */ 
+			memset(&addr6, 0, sizeof(struct in6_addr));
+			addr6.s6_addr32[0] = htonl(0xFE800000);
+
+			if (0 == ipv6_generate_eui64(addr6.s6_addr + 8, dev))
+			{
+				addrconf_add_linklocal(idev, &addr6);
+				err = 0;
+			}
+		}
+	}
+
+	return err;
+
+}
+#endif
+
 static inline int
 ipv6_inherit_linklocal(struct inet6_dev *idev, struct net_device *link_dev)
 {
@@ -2555,6 +2637,14 @@ static int addrconf_notify(struct notifier_block *this, unsigned long event,
 				return notifier_from_errno(err);
 		}
 		break;
+
+#if defined(CONFIG_MIPS_BRCM)
+	case NETDEV_CHANGEADDR:
+		addrconf_update_lladdr(dev);
+		break;
+#endif
+
+      
 	}
 
 	return NOTIFY_OK;
@@ -2683,7 +2773,12 @@ static void addrconf_rs_timer(unsigned long data)
 {
 	struct inet6_ifaddr *ifp = (struct inet6_ifaddr *) data;
 
+#if defined(CONFIG_MIPS_BRCM)
+	/* WAN interface needs to act as a host. */
+	if (ifp->idev->cnf.forwarding && !(ifp->idev->dev->priv_flags & IFF_WANDEV))
+#else
 	if (ifp->idev->cnf.forwarding)
+#endif
 		goto out;
 
 	if (ifp->idev->if_flags & IF_RA_RCVD) {
@@ -2839,7 +2934,13 @@ static void addrconf_dad_completed(struct inet6_ifaddr *ifp)
 	   start sending router solicitations.
 	 */
 
+#if defined(CONFIG_MIPS_BRCM)
+	/* WAN interface needs to act as a host. */
+	if (( (ifp->idev->cnf.forwarding == 0) || 
+		  (ifp->idev->dev->priv_flags & IFF_WANDEV) ) &&
+#else
 	if (ifp->idev->cnf.forwarding == 0 &&
+#endif
 	    ifp->idev->cnf.rtr_solicits > 0 &&
 	    (dev->flags&IFF_LOOPBACK) == 0 &&
 	    (ipv6_addr_type(&ifp->addr) & IPV6_ADDR_LINKLOCAL)) {
@@ -3912,11 +4013,21 @@ static void __ipv6_ifa_notify(int event, struct inet6_ifaddr *ifp)
 		 */
 		if (!(ifp->rt->rt6i_node))
 			ip6_ins_rt(ifp->rt);
+#if defined(CONFIG_MIPS_BRCM)
+		if (ifp->idev->cnf.forwarding && 
+			!(ifp->idev->dev->priv_flags & IFF_WANDEV))
+#else
 		if (ifp->idev->cnf.forwarding)
+#endif
 			addrconf_join_anycast(ifp);
 		break;
 	case RTM_DELADDR:
+#if defined(CONFIG_MIPS_BRCM)
+		if (ifp->idev->cnf.forwarding && 
+			!(ifp->idev->dev->priv_flags & IFF_WANDEV))
+#else
 		if (ifp->idev->cnf.forwarding)
+#endif
 			addrconf_leave_anycast(ifp);
 		addrconf_leave_solict(ifp->idev, &ifp->addr);
 		dst_hold(&ifp->rt->u.dst);

@@ -2,6 +2,10 @@
 # Makefile for the Linux networking core.
 #
 
+# CONFIG_MIPS_BRCM Begin Broadcom changed code.
+EXTRA_CFLAGS	+= -I$(INC_BRCMDRIVER_PUB_PATH)/$(BRCM_BOARD)
+# CONFIG_MIPS_BRCM End Broadcom changed code.
+
 obj-y := sock.o request_sock.o skbuff.o iovec.o datagram.o stream.o scm.o \
 	 gen_stats.o gen_estimator.o net_namespace.o
 
@@ -20,3 +24,8 @@ obj-$(CONFIG_FIB_RULES) += fib_rules.o
 obj-$(CONFIG_TRACEPOINTS) += net-traces.o
 obj-$(CONFIG_NET_DROP_MONITOR) += drop_monitor.o
 
+# CONFIG_MIPS_BRCM Begin Broadcom changed code for CONFIG_BLOG
+obj-y += blog.o blog_rule.o nbuff.o iqos.o gbpm.o
+#obj-$(CONFIG_BLOG) += blog.o
+#obj-y += nbuff.o
+# CONFIG_MIPS_BRCM End Broadcom changed code for CONFIG_BLOG

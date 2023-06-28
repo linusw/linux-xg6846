@@ -224,6 +224,10 @@ extern int flush_work(struct work_struct *work);
 
 extern int cancel_work_sync(struct work_struct *work);
 
+#ifdef CONFIG_MIPS_BRCM
+void set_workqueue_thread_prio(struct workqueue_struct *wq, int policy, int prio);
+#endif /* CONFIG_MIPS_BRCM */
+
 /*
  * Kill off a pending schedule_delayed_work().  Note that the work callback
  * function may still be running on return from cancel_delayed_work(), unless

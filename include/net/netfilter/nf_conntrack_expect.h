@@ -43,6 +43,12 @@ struct nf_conntrack_expect
 	/* Expectation class */
 	unsigned int class;
 
+#if defined(CONFIG_MIPS_BRCM)
+	unsigned derived_timeout; /* 0 means no derived_timeout, 0xFFFFFFFF
+				   * means never timeout until master ct is
+				   * disconnected, others means timeout secs */
+#endif
+
 #ifdef CONFIG_NF_NAT_NEEDED
 	__be32 saved_ip;
 	/* This is the original per-proto part, used to map the
@@ -74,6 +80,9 @@ struct nf_conntrack_expect_policy
 
 #define NF_CT_EXPECT_PERMANENT	0x1
 #define NF_CT_EXPECT_INACTIVE	0x2
+#ifdef CONFIG_MIPS_BRCM
+#define NF_CT_EXPECT_DERIVED_TIMEOUT 0x80
+#endif
 
 int nf_conntrack_expect_init(struct net *net);
 void nf_conntrack_expect_fini(struct net *net);

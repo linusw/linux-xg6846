@@ -594,24 +594,41 @@ static void igmpv3_send_cr(struct in_device *in_dev)
 	/* change recs */
 	for (pmc=in_dev->mc_list; pmc; pmc=pmc->next) {
 		spin_lock_bh(&pmc->lock);
-		if (pmc->sfcount[MCAST_EXCLUDE]) {
-			type = IGMPV3_BLOCK_OLD_SOURCES;
-			dtype = IGMPV3_ALLOW_NEW_SOURCES;
-		} else {
-			type = IGMPV3_ALLOW_NEW_SOURCES;
-			dtype = IGMPV3_BLOCK_OLD_SOURCES;
+#if defined(CONFIG_MIPS_BRCM) && defined(CC_BRCM_KF_MULTI_IGMP_GR_SUPPRESSION)
+		if ( pmc->osfmode == pmc->sfmode ) {
+#endif
+			if (pmc->sfcount[MCAST_EXCLUDE]) {
+				type = IGMPV3_BLOCK_OLD_SOURCES;
+				dtype = IGMPV3_ALLOW_NEW_SOURCES;
+			} else {
+				type = IGMPV3_ALLOW_NEW_SOURCES;
+				dtype = IGMPV3_BLOCK_OLD_SOURCES;
+			}
+			skb = add_grec(skb, pmc, type, 0, 0);
+			skb = add_grec(skb, pmc, dtype, 0, 1);	/* deleted sources */
+#if defined(CONFIG_MIPS_BRCM) && defined(CC_BRCM_KF_MULTI_IGMP_GR_SUPPRESSION)
 		}
-		skb = add_grec(skb, pmc, type, 0, 0);
-		skb = add_grec(skb, pmc, dtype, 0, 1);	/* deleted sources */
+#endif
 
 		/* filter mode changes */
 		if (pmc->crcount) {
-			if (pmc->sfmode == MCAST_EXCLUDE)
-				type = IGMPV3_CHANGE_TO_EXCLUDE;
-			else
-				type = IGMPV3_CHANGE_TO_INCLUDE;
-			skb = add_grec(skb, pmc, type, 0, 0);
+#if defined(CONFIG_MIPS_BRCM) && defined(CC_BRCM_KF_MULTI_IGMP_GR_SUPPRESSION)
+			if ( pmc->osfmode != pmc->sfmode ) {
+#endif
+				if (pmc->sfmode == MCAST_EXCLUDE)
+					type = IGMPV3_CHANGE_TO_EXCLUDE;
+				else
+					type = IGMPV3_CHANGE_TO_INCLUDE;
+				skb = add_grec(skb, pmc, type, 0, 0);
+#if defined(CONFIG_MIPS_BRCM) && defined(CC_BRCM_KF_MULTI_IGMP_GR_SUPPRESSION)
+			}
+#endif
 			pmc->crcount--;
+#if defined(CONFIG_MIPS_BRCM) && defined(CC_BRCM_KF_MULTI_IGMP_GR_SUPPRESSION)
+			if ( pmc->crcount == 0 ) {
+				pmc->osfmode = pmc->sfmode;
+			}
+#endif
 		}
 		spin_unlock_bh(&pmc->lock);
 	}
@@ -1116,6 +1133,10 @@ static void igmpv3_clear_delrec(struct in_device *in_dev)
 }
 #endif
 
+#if defined(CONFIG_MIPS_BRCM)
+#define IGMP_RIP_ROUTER htonl(0xE0000009L)
+#endif
+
 static void igmp_group_dropped(struct ip_mc_list *im)
 {
 	struct in_device *in_dev = im->interface;
@@ -1131,6 +1152,11 @@ static void igmp_group_dropped(struct ip_mc_list *im)
 #ifdef CONFIG_IP_MULTICAST
 	if (im->multiaddr == IGMP_ALL_HOSTS)
 		return;
+
+#if defined(CONFIG_MIPS_BRCM)
+	if (im->multiaddr == IGMP_RIP_ROUTER)
+		return;
+#endif
 
 	reporter = im->reporter;
 	igmp_stop_timer(im);
@@ -1165,6 +1191,11 @@ static void igmp_group_added(struct ip_mc_list *im)
 #ifdef CONFIG_IP_MULTICAST
 	if (im->multiaddr == IGMP_ALL_HOSTS)
 		return;
+
+#if defined(CONFIG_MIPS_BRCM)
+	if (im->multiaddr == IGMP_RIP_ROUTER)
+		return;
+#endif
 
 	if (in_dev->dead)
 		return;
@@ -1216,6 +1247,9 @@ void ip_mc_inc_group(struct in_device *in_dev, __be32 addr)
 	im->multiaddr = addr;
 	/* initial mode is (EX, empty) */
 	im->sfmode = MCAST_EXCLUDE;
+#if defined(CONFIG_MIPS_BRCM) && defined(CC_BRCM_KF_MULTI_IGMP_GR_SUPPRESSION)
+	im->osfmode = MCAST_INCLUDE;
+#endif
 	im->sfcount[MCAST_INCLUDE] = 0;
 	im->sfcount[MCAST_EXCLUDE] = 1;
 	im->sources = NULL;

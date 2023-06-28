@@ -25,6 +25,9 @@
 #define NETLINK_SCSITRANSPORT	18	/* SCSI Transports */
 #define NETLINK_ECRYPTFS	19
 
+#define NETLINK_BRCM_MONITOR 25 /*send events to userspace monitor task(broadcom specific)*/
+#define NETLINK_MCPD            30       /* for multicast */
+
 #define MAX_LINKS 32		
 
 struct net;

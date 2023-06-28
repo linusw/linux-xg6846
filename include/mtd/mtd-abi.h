@@ -6,6 +6,7 @@
 #define __MTD_ABI_H__
 
 #include <linux/types.h>
+#include <linux/autoconf.h>
 
 struct erase_info_user {
 	__u32 start;
@@ -112,14 +113,23 @@ struct nand_oobfree {
 	__u32 length;
 };
 
+
+#ifdef CONFIG_BRCMNAND_MTD_EXTENSION
+#define MTD_MAX_OOBFREE_ENTRIES	17
+#define MTD_MAX_ECCPOS_ENTRIES	320	
+
+#else
 #define MTD_MAX_OOBFREE_ENTRIES	8
+#define MTD_MAX_ECCPOS_ENTRIES	64	
+#endif
+
 /*
  * ECC layout control structure. Exported to userspace for
  * diagnosis and to allow creation of raw images
  */
 struct nand_ecclayout {
 	__u32 eccbytes;
-	__u32 eccpos[64];
+	__u32 eccpos[MTD_MAX_ECCPOS_ENTRIES];
 	__u32 oobavail;
 	struct nand_oobfree oobfree[MTD_MAX_OOBFREE_ENTRIES];
 };

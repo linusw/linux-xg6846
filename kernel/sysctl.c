@@ -686,6 +686,16 @@ static struct ctl_table kern_table[] = {
 		.mode		= 0644,
 		.proc_handler	= &proc_dointvec,
 	},
+#ifdef CONFIG_MIPS_BRCM
+	{
+		.ctl_name	= KERN_PRINTK_WITH_INTERRUPTS_ENABLED,
+		.procname	= "printk_with_interrupts_enabled",
+		.data		= &printk_with_interrupts_enabled,
+		.maxlen		= sizeof(int),
+		.mode		= 0644,
+		.proc_handler	= &proc_dointvec,
+	},
+#endif	
 #endif
 	{
 		.ctl_name	= KERN_NGROUPS_MAX,

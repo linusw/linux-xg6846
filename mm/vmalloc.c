@@ -154,7 +154,7 @@ static int vmap_pud_range(pgd_t *pgd, unsigned long addr,
  * Ie. pte at addr+N*PAGE_SIZE shall point to pfn corresponding to pages[N]
  */
 static int vmap_page_range_noflush(unsigned long start, unsigned long end,
-				   pgprot_t prot, struct page **pages)
+				pgprot_t prot, struct page **pages)
 {
 	pgd_t *pgd;
 	unsigned long next;
@@ -672,7 +672,7 @@ struct vmap_block {
 	DECLARE_BITMAP(alloc_map, VMAP_BBMAP_BITS);
 	DECLARE_BITMAP(dirty_map, VMAP_BBMAP_BITS);
 	union {
-		struct list_head free_list;
+			struct list_head free_list;
 		struct rcu_head rcu_head;
 	};
 };

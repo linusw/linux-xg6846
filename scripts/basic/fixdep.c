@@ -373,10 +373,11 @@ void print_deps(void)
 void traps(void)
 {
 	static char test[] __attribute__((aligned(sizeof(int)))) = "CONF";
+	int *test_intptr = (int *) test;  //BRCM: do cast in 2 steps to fix compiler warning
 
-	if (*(int *)test != INT_CONF) {
+	if (*test_intptr != INT_CONF) {
 		fprintf(stderr, "fixdep: sizeof(int) != 4 or wrong endianess? %#x\n",
-			*(int *)test);
+			*test_intptr);
 		exit(2);
 	}
 }

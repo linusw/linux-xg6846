@@ -4,6 +4,9 @@ config MIPS
 	select HAVE_IDE
 	select HAVE_OPROFILE
 	select HAVE_ARCH_KGDB
+	select HAVE_FUNCTION_TRACER
+	select HAVE_FUNCTION_TRACE_MCOUNT_TEST
+	select HAVE_FUNCTION_GRAPH_TRACER
 	# Horrible source of confusion.  Die, die, die ...
 	select EMBEDDED
 	select RTC_LIB
@@ -14,6 +17,7 @@ menu "Machine selection"
 
 config ZONE_DMA
 	bool
+	default y
 
 choice
 	prompt "System type"
@@ -38,6 +42,21 @@ config BASLER_EXCITE
 	help
 	  The eXcite is a smart camera platform manufactured by
 	  Basler Vision Technologies AG.
+
+# CONFIG_MIPS_BRCM Begin Broadcom changed code
+config MIPS_BRCM
+	bool "Broadcom 963xx boards (kern)"
+	select MIPS_BCM
+	select CEVT_R4K
+	select CSRC_R4K
+	select IRQ_CPU
+	select DMA_NONCOHERENT
+	select SYS_SUPPORTS_32BIT_KERNEL
+	select SYS_HAS_CPU_MIPS32_R1
+	select SYS_SUPPORTS_BIG_ENDIAN
+	help
+	 Support for BCM963xx boards"
+# End Broadcom changed code
 
 config BCM47XX
 	bool "BCM47XX based boards"
@@ -644,6 +663,11 @@ source "arch/mips/txx9/Kconfig"
 source "arch/mips/vr41xx/Kconfig"
 source "arch/mips/cavium-octeon/Kconfig"
 
+# CONFIG_MIPS_BRCM Begin Broadcom changed code
+source "arch/mips/bcm963xx/Kconfig"
+# End Broadcom changed code
+
+
 endmenu
 
 config RWSEM_GENERIC_SPINLOCK
@@ -971,6 +995,9 @@ config BOOT_ELF32
 
 config MIPS_L1_CACHE_SHIFT
 	int
+# CONFIG_MIPS_BRCM Begin Broadcom changed code
+	default "4" if MIPS_BRCM
+# End Broadcom changed code
 	default "4" if MACH_DECSTATION || MIKROTIK_RB532
 	default "7" if SGI_IP22 || SGI_IP27 || SGI_IP28 || SNI_RM || CPU_CAVIUM_OCTEON
 	default "4" if PMC_MSP4200_EVAL
@@ -2008,6 +2035,8 @@ config PCI
 config PCI_DOMAINS
 	bool
 
+source "drivers/pci/pcie/Kconfig"
+
 source "drivers/pci/Kconfig"
 
 #
@@ -2117,6 +2146,21 @@ config BINFMT_ELF32
 	bool
 	default y if MIPS32_O32 || MIPS32_N32
 
+# Begin Broadcom changed code.
+#config BRCM_VMTOOLS
+#	bool "Broadcom MIPS memory diagnostic tools"
+#	help
+#	 provides proc/accumem, proc/brcm/pagewalk and proc/brcm/free_pagewalk
+
+config BRCM_CSTAT
+	bool "Broadcom MIPS cache stats tool"
+	help
+	 provides proc/brcm/cstat, get cache hits/misses using performance counter
+
+config BRCM_IKOS
+	bool "Build image for IKOS simulation"
+# End Broadcom changed code.
+
 endmenu
 
 menu "Power management options"
@@ -2142,3 +2186,6 @@ source "security/Kconfig"
 source "crypto/Kconfig"
 
 source "lib/Kconfig"
+
+# XAVI Dom 2011/02/09 add for define Configuration
+source "../../xavi_makefile/Kconfig_xavi"

@@ -66,6 +66,39 @@
 /* If this is set, the section belongs in the init part of the module */
 #define INIT_OFFSET_MASK (1UL << (BITS_PER_LONG-1))
 
+#if defined(CONFIG_MIPS_BRCM)
+/*
+** These are pointers to memory chunks allocated for the DSP module. The memory is allocated in
+** start_kernel() during initialization. 
+*/
+extern void *dsp_core;
+extern void *dsp_init;
+
+/*
+** These are pointers to memory chunks allocated for the FAP module. The memory is allocated in
+** start_kernel() during initialization. 
+*/
+
+/* Size of the DSP core and init buffers. */
+static unsigned long dsp_core_size;
+static unsigned long dsp_init_size;
+
+/*
+ * is_dsp_module - is this the DSP module?
+ * @addr: the module to check.
+ */
+#define is_dsp_module(mod) (strcmp(mod->name, "dspdd") == 0)
+
+/*
+ * is_dsp_module_address - is this address inside the DSP module?
+ * @addr: the address to check.
+ */
+#define is_dsp_module_address(addr) \
+	(dsp_core && ((unsigned long*)addr >= (unsigned long*)dsp_core) && ((unsigned long*)addr < ((unsigned long*)dsp_core) + dsp_core_size)) || \
+	(dsp_init && ((unsigned long*)addr >= (unsigned long*)dsp_init) && ((unsigned long*)addr < ((unsigned long*)dsp_init) + dsp_init_size))
+
+#endif /* defined(CONFIG_MIPS_BRCM) */
+
 /* List of modules, protected by module_mutex or preempt_disable
  * (delete uses stop_machine/add uses RCU list operations). */
 DEFINE_MUTEX(module_mutex);
@@ -320,10 +353,10 @@ static bool find_symbol_in_section(const struct symsearch *syms,
 /* Find a symbol and return it, along with, (optional) crc and
  * (optional) module which owns it */
 const struct kernel_symbol *find_symbol(const char *name,
-					struct module **owner,
-					const unsigned long **crc,
-					bool gplok,
-					bool warn)
+				 struct module **owner,
+				 const unsigned long **crc,
+				 bool gplok,
+				 bool warn)
 {
 	struct find_symbol_arg fsa;
 
@@ -801,42 +834,55 @@ SYSCALL_DEFINE2(delete_module, const char __user *, name_user,
 		goto out;
 	}
 
-	if (!list_empty(&mod->modules_which_use_me)) {
-		/* Other modules depend on us: get rid of them first. */
-		ret = -EWOULDBLOCK;
-		goto out;
-	}
-
-	/* Doing init or already dying? */
-	if (mod->state != MODULE_STATE_LIVE) {
-		/* FIXME: if (force), slam module count and wake up
-                   waiter --RR */
-		DEBUGP("%s already dying\n", mod->name);
-		ret = -EBUSY;
-		goto out;
-	}
-
-	/* If it has an init func, it must have an exit func to unload */
-	if (mod->init && !mod->exit) {
-		forced = try_force_unload(flags);
-		if (!forced) {
-			/* This module can't be removed */
+#if defined(CONFIG_MIPS_BRCM)
+    /* This check is not needed for the DSP module */
+	if ( !is_dsp_module(mod) )
+#endif /* defined(CONFIG_MIPS_BRCM) */
+		{
+		if (!list_empty(&mod->modules_which_use_me)) {
+			/* Other modules depend on us: get rid of them first. */
+			ret = -EWOULDBLOCK;
+			goto out;
+		}
+	
+		/* Doing init or already dying? */
+		if (mod->state != MODULE_STATE_LIVE) {
+			/* FIXME: if (force), slam module count and wake up
+	                   waiter --RR */
+			DEBUGP("%s already dying\n", mod->name);
 			ret = -EBUSY;
 			goto out;
 		}
-	}
 
-	/* Set this up before setting mod->state */
-	mod->waiter = current;
+		/* If it has an init func, it must have an exit func to unload */
+		if (mod->init && !mod->exit) {
+			forced = try_force_unload(flags);
+			if (!forced) {
+				/* This module can't be removed */
+				ret = -EBUSY;
+				goto out;
+			}
+		}
 
-	/* Stop the machine so refcounts can't move and disable module. */
-	ret = try_stop_module(mod, flags, &forced);
-	if (ret != 0)
-		goto out;
+		/* Set this up before setting mod->state */
+		mod->waiter = current;
 
-	/* Never wait if forced. */
-	if (!forced && module_refcount(mod) != 0)
-		wait_for_zero_refcount(mod);
+		/* Stop the machine so refcounts can't move and disable module. */
+		ret = try_stop_module(mod, flags, &forced);
+		if (ret != 0)
+			goto out;
+
+		/* Never wait if forced. */
+		if (!forced && module_refcount(mod) != 0)
+			wait_for_zero_refcount(mod);
+	    }
+
+#if defined(CONFIG_MIPS_BRCM)
+    else
+    {
+        ret = 0;
+    }
+#endif /* defined(CONFIG_MIPS_BRCM) */
 
 	mutex_unlock(&module_mutex);
 	/* Final destruction now noone is using it. */
@@ -1094,9 +1140,9 @@ static inline int same_magic(const char *amagic, const char *bmagic,
 /* Resolve a symbol for this module.  I.e. if we find one, record usage.
    Must be holding module_mutex. */
 static const struct kernel_symbol *resolve_symbol(Elf_Shdr *sechdrs,
-						  unsigned int versindex,
-						  const char *name,
-						  struct module *mod)
+				    unsigned int versindex,
+				    const char *name,
+				    struct module *mod)
 {
 	struct module *owner;
 	const struct kernel_symbol *sym;
@@ -1104,8 +1150,8 @@ static const struct kernel_symbol *resolve_symbol(Elf_Shdr *sechdrs,
 
 	sym = find_symbol(name, &owner, &crc,
 			  !(mod->taints & (1 << TAINT_PROPRIETARY_MODULE)), true);
-	/* use_module can fail due to OOM,
-	   or module initialization or unloading */
+		/* use_module can fail due to OOM,
+		   or module initialization or unloading */
 	if (sym) {
 		if (!check_version(sechdrs, versindex, name, mod, crc) ||
 		    !use_module(mod, owner))
@@ -1492,8 +1538,15 @@ static void free_module(struct module *mod)
 	/* release any pointers to mcount in this module */
 	ftrace_release(mod->module_core, mod->core_size);
 
+#if defined(CONFIG_MIPS_BRCM)
 	/* This may be NULL, but that's OK */
-	module_free(mod, mod->module_init);
+	if ( !is_dsp_module(mod) )
+#endif /* defined(CONFIG_MIPS_BRCM) */
+	/* This may be NULL, but that's OK */
+        {
+		module_free(mod, mod->module_init);
+        }
+
 	kfree(mod->args);
 	if (mod->percpu)
 		percpu_modfree(mod->percpu);
@@ -1504,8 +1557,13 @@ static void free_module(struct module *mod)
 	/* Free lock-classes: */
 	lockdep_free_key_range(mod->module_core, mod->core_size);
 
+#if defined(CONFIG_MIPS_BRCM)
 	/* Finally, free the core (containing the module structure) */
-	module_free(mod, mod->module_core);
+	if ( !is_dsp_module(mod) )
+#endif /* defined(CONFIG_MIPS_BRCM) */
+        {
+		module_free(mod, mod->module_core);
+	}
 }
 
 void *__symbol_get(const char *symbol)
@@ -1592,7 +1650,7 @@ static int simplify_symbols(Elf_Shdr *sechdrs,
 
 		case SHN_UNDEF:
 			ksym = resolve_symbol(sechdrs, versindex,
-					      strtab + sym[i].st_name, mod);
+					   strtab + sym[i].st_name, mod);
 			/* Ok if resolved.  */
 			if (ksym) {
 				sym[i].st_value = ksym->value;
@@ -2049,7 +2107,16 @@ static noinline struct module *load_module(void __user *umod,
 	layout_sections(mod, hdr, sechdrs, secstrings);
 
 	/* Do the allocs. */
-	ptr = module_alloc_update_bounds(mod->core_size);
+	if ( is_dsp_module(mod) )
+	{
+		ptr = dsp_core;
+		dsp_core_size = dsp_core ? mod->core_size : 0;
+	}
+	else
+	{
+		ptr = module_alloc_update_bounds(mod->core_size);
+	} 
+	      
 	if (!ptr) {
 		err = -ENOMEM;
 		goto free_percpu;
@@ -2057,7 +2124,18 @@ static noinline struct module *load_module(void __user *umod,
 	memset(ptr, 0, mod->core_size);
 	mod->module_core = ptr;
 
-	ptr = module_alloc_update_bounds(mod->init_size);
+#if defined(CONFIG_MIPS_BRCM)
+	if ( is_dsp_module(mod) )
+	{
+		ptr = dsp_init;
+		dsp_init_size = dsp_init ? mod->init_size : 0;
+	}
+	else
+#endif
+	{
+		ptr = module_alloc_update_bounds(mod->init_size);
+	} 
+	      
 	if (!ptr && mod->init_size) {
 		err = -ENOMEM;
 		goto free_core;
@@ -2309,10 +2387,23 @@ static noinline struct module *load_module(void __user *umod,
  free_init:
 	percpu_modfree(mod->refptr);
 #endif
+
+#if defined(CONFIG_MIPS_BRCM)
+    /* Only if not the dsp module */
+	if ( !is_dsp_module(mod) )
+#endif /* defined(CONFIG_MIPS_BRCM) */
+    {
 	module_free(mod, mod->module_init);
+    }
  free_core:
+#if defined(CONFIG_MIPS_BRCM)
+    /* Only if not the dsp module */
+    if ( !is_dsp_module(mod) )
+#endif /* defined(CONFIG_MIPS_BRCM) */
+    {
 	module_free(mod, mod->module_core);
 	/* mod will be freed with core. Don't access it beyond this line! */
+    }
  free_percpu:
 	if (percpu)
 		percpu_modfree(percpu);
@@ -2368,7 +2459,13 @@ SYSCALL_DEFINE3(init_module, void __user *, umod,
 		blocking_notifier_call_chain(&module_notify_list,
 					     MODULE_STATE_GOING, mod);
 		mutex_lock(&module_mutex);
+
+#if defined(CONFIG_MIPS_BRCM)
+        /* Only if not the dsp module */
+		if ( !is_dsp_module(mod) )
+#endif /* defined(CONFIG_MIPS_BRCM) */
 		free_module(mod);
+
 		mutex_unlock(&module_mutex);
 		wake_up(&module_wq);
 		return ret;
@@ -2394,10 +2491,19 @@ SYSCALL_DEFINE3(init_module, void __user *, umod,
 	mutex_lock(&module_mutex);
 	/* Drop initial reference. */
 	module_put(mod);
-	module_free(mod, mod->module_init);
+
+#if defined(CONFIG_MIPS_BRCM)
+#if !defined(CONFIG_BRCM_BOUNCE)
+    /* Only if not the dsp module */
+	if ( !is_dsp_module(mod) )
+        {
+		module_free(mod, mod->module_init);
+        }
 	mod->module_init = NULL;
 	mod->init_size = 0;
 	mod->init_text_size = 0;
+#endif
+#endif  /* defined(CONFIG_MIPS_BRCM) */
 	mutex_unlock(&module_mutex);
 
 	return 0;
@@ -2686,7 +2792,11 @@ static int m_show(struct seq_file *m, void *p)
 		   mod->state == MODULE_STATE_COMING ? "Loading":
 		   "Live");
 	/* Used by oprofile and other similar tools. */
+#if defined(CONFIG_MIPS_BRCM) && !defined(CONFIG_BRCM_BOUNCE)
 	seq_printf(m, " 0x%p", mod->module_core);
+#else
+	seq_printf(m, " 0x%p 0x%p", mod->module_core, mod->module_init );
+#endif
 
 	/* Taints info */
 	if (mod->taints)
@@ -2781,7 +2891,12 @@ struct module *__module_address(unsigned long addr)
 {
 	struct module *mod;
 
-	if (addr < module_addr_min || addr > module_addr_max)
+	if (
+#if defined(CONFIG_MIPS_BRCM) && defined(CONFIG_BCM_BCMDSP_MODULE)
+		(!is_dsp_module_address(addr)) && 
+#endif /* defined(CONFIG_MIPS_BRCM) && defined(CONFIG_BCM_BCMDSP_MODULE) */
+		(addr < module_addr_min || addr > module_addr_max)
+		)
 		return NULL;
 
 	list_for_each_entry_rcu(mod, &modules, list)
@@ -2837,11 +2952,20 @@ void print_modules(void)
 	struct module *mod;
 	char buf[8];
 
-	printk("Modules linked in:");
+	printk("Modules linked in:\n");
 	/* Most callers should already have preempt disabled, but make sure */
 	preempt_disable();
 	list_for_each_entry_rcu(mod, &modules, list)
+	{
 		printk(" %s%s", mod->name, module_flags(mod, buf));
+#if defined (CONFIG_MIPS_BRCM)
+		printk(" init_addr(%p - %p), core_addr(%p - %p)\n",
+			mod->module_init,
+			mod->module_init+mod->init_text_size,
+			mod->module_core, 
+			mod->module_core+mod->core_text_size);
+#endif
+	}
 	preempt_enable();
 	if (last_unloaded_module[0])
 		printk(" [last unloaded: %s]", last_unloaded_module);

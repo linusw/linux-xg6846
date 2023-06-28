@@ -30,6 +30,9 @@
 #include <linux/socket.h>
 #include <linux/mm.h>
 #include <linux/rculist_nulls.h>
+#if defined(CONFIG_MIPS_BRCM)
+#include <linux/blog.h>
+#endif
 
 #include <net/netfilter/nf_conntrack.h>
 #include <net/netfilter/nf_conntrack_l3proto.h>
@@ -65,6 +68,11 @@ static struct kmem_cache *nf_conntrack_cachep __read_mostly;
 
 static int nf_conntrack_hash_rnd_initted;
 static unsigned int nf_conntrack_hash_rnd;
+
+#if defined(CONFIG_MIPS_BRCM)
+/* bugfix for lost connection */
+LIST_HEAD(safe_list);
+#endif
 
 static u_int32_t __hash_conntrack(const struct nf_conntrack_tuple *tuple,
 				  unsigned int size, unsigned int rnd)
@@ -171,6 +179,10 @@ clean_from_lists(struct nf_conn *ct)
 	nf_ct_remove_expectations(ct);
 }
 
+#if defined(CONFIG_MIPS_BRCM)
+static void death_by_timeout(unsigned long ul_conntrack);
+#endif
+
 static void
 destroy_conntrack(struct nf_conntrack *nfct)
 {
@@ -178,7 +190,35 @@ destroy_conntrack(struct nf_conntrack *nfct)
 	struct net *net = nf_ct_net(ct);
 	struct nf_conntrack_l4proto *l4proto;
 
+
+#if defined(CONFIG_MIPS_BRCM) && defined(CONFIG_BLOG)
+	pr_debug("destroy_conntrack(%p) blog keys[0x%08x,0x%08x]\n",
+		ct, ct->blog_key[IP_CT_DIR_ORIGINAL], ct->blog_key[IP_CT_DIR_REPLY]);
+
+
+	/* Conntrack going away, notify blog client */
+	if ( (ct->blog_key[IP_CT_DIR_ORIGINAL] != BLOG_KEY_NONE) || 
+			(ct->blog_key[IP_CT_DIR_REPLY] != BLOG_KEY_NONE) )
+	{
+		/*
+		 *  Blog client may perform the following blog requests:
+		 *	- FLOWTRACK_KEY_SET BLOG_PARAM1_DIR_ORIG 0
+		 *	- FLOWTRACK_KEY_SET BLOG_PARAM1_DIR_REPLY 0
+		 *	- FLOWTRACK_EXCLUDE
+		 */
+		blog_notify(DESTROY_FLOWTRACK, (void*)ct,
+					(uint32_t)ct->blog_key[IP_CT_DIR_ORIGINAL],
+					(uint32_t)ct->blog_key[IP_CT_DIR_REPLY]);
+
+		/* Safe: In case blog client does not set key to 0 explicilty */
+		ct->blog_key[IP_CT_DIR_ORIGINAL] = BLOG_KEY_NONE;
+		ct->blog_key[IP_CT_DIR_REPLY]    = BLOG_KEY_NONE;
+	}
+	clear_bit(IPS_BLOG_BIT, &ct->status);	/* Disable further blogging */
+#else
 	pr_debug("destroy_conntrack(%p)\n", ct);
+#endif
+
 	NF_CT_ASSERT(atomic_read(&nfct->use) == 0);
 	NF_CT_ASSERT(!timer_pending(&ct->timeout));
 
@@ -213,7 +253,26 @@ destroy_conntrack(struct nf_conntrack *nfct)
 	spin_unlock_bh(&nf_conntrack_lock);
 
 	if (ct->master)
+	{
+#if defined(CONFIG_MIPS_BRCM)
+		list_del(&ct->derived_list);
+#endif
 		nf_ct_put(ct->master);
+	}
+
+#if defined(CONFIG_MIPS_BRCM)
+	/* Disconnect all child connections that have infinit timeout */
+	if (!list_empty(&ct->derived_connections)) {
+		struct nf_conn *child, *tmp;
+
+		list_for_each_entry_safe(child, tmp, &ct->derived_connections,
+			derived_list) {
+			if (child->derived_timeout == 0xFFFFFFFF &&
+			    del_timer(&child->timeout))
+				death_by_timeout((unsigned long)child);
+		}
+	}
+#endif
 
 	pr_debug("destroy_conntrack: returning ct=%p to slab\n", ct);
 	nf_conntrack_free(ct);
@@ -487,6 +546,43 @@ static noinline int early_drop(struct net *net, unsigned int hash)
 	return dropped;
 }
 
+#if defined(CONFIG_MIPS_BRCM)
+static int regardless_drop(struct net *net)
+{
+   struct nf_conn *ct = NULL;
+   int dropped = 0;
+
+   /* Choose the first one (also the oldest one). LRU */
+   spin_lock_bh(&nf_conntrack_lock);
+   if (!list_empty(&safe_list)) {
+      ct = container_of(safe_list.next, struct nf_conn, safe_list);
+      if (unlikely(!atomic_inc_not_zero(&ct->ct_general.use)))
+          ct = NULL;
+   }
+   spin_unlock_bh(&nf_conntrack_lock);
+
+   if (!ct) {
+      return dropped;
+   }
+
+   if (del_timer(&ct->timeout)) {
+      death_by_timeout((unsigned long)ct);
+      dropped = 1;
+      NF_CT_STAT_INC_ATOMIC(net, early_drop);
+   } 
+   /*else{
+   * this happens when the ct at safelist head is removed from the timer list 
+   * but not yet freed due to ct->ct_general.use > 1. This ct will be freed when its
+   * ref count is dropped to zero. At this point we dont create new connections 
+   * until some old connection are freed.
+   * } 
+   */     
+
+   nf_ct_put(ct);
+   return dropped;
+}
+#endif
+
 struct nf_conn *nf_conntrack_alloc(struct net *net,
 				   const struct nf_conntrack_tuple *orig,
 				   const struct nf_conntrack_tuple *repl,
@@ -507,12 +603,24 @@ struct nf_conn *nf_conntrack_alloc(struct net *net,
 	    unlikely(atomic_read(&net->ct.count) > nf_conntrack_max)) {
 		unsigned int hash = hash_conntrack(orig);
 		if (!early_drop(net, hash)) {
+#if defined(CONFIG_MIPS_BRCM)	
+			/* Sorry, we have to kick LRU out regardlessly. */
+			if (!regardless_drop(net)) {
+            atomic_dec(&net->ct.count);
+            if (net_ratelimit())
+               printk(KERN_WARNING
+                  "nf_conntrack: table full, dropping"
+                  " packet.\n");
+            return ERR_PTR(-ENOMEM);
+			}
+#else
 			atomic_dec(&net->ct.count);
 			if (net_ratelimit())
 				printk(KERN_WARNING
 				       "nf_conntrack: table full, dropping"
 				       " packet.\n");
 			return ERR_PTR(-ENOMEM);
+#endif
 		}
 	}
 
@@ -524,6 +632,19 @@ struct nf_conn *nf_conntrack_alloc(struct net *net,
 	}
 
 	atomic_set(&ct->ct_general.use, 1);
+#ifdef CONFIG_MIPS_BRCM
+	INIT_LIST_HEAD(&ct->derived_connections);
+#endif
+
+#if defined(CONFIG_MIPS_BRCM) && defined(CONFIG_BLOG)
+	pr_debug("nf_conntrack_alloc: ct<%p> BLOGible\n", ct );
+	set_bit(IPS_BLOG_BIT, &ct->status);  /* Enable conntrack blogging */
+
+	/* new conntrack: reset blog keys */
+	ct->blog_key[IP_CT_DIR_ORIGINAL] = BLOG_KEY_NONE;
+	ct->blog_key[IP_CT_DIR_REPLY]    = BLOG_KEY_NONE;
+#endif
+
 	ct->tuplehash[IP_CT_DIR_ORIGINAL].tuple = *orig;
 	ct->tuplehash[IP_CT_DIR_REPLY].tuple = *repl;
 	/* Don't set timer yet: wait for confirmation */
@@ -540,6 +661,13 @@ void nf_conntrack_free(struct nf_conn *ct)
 {
 	struct net *net = nf_ct_net(ct);
 
+#if defined(CONFIG_MIPS_BRCM)
+	/* bugfix for lost connections */
+	spin_lock_bh(&nf_conntrack_lock);
+	if (ct->safe_list.next)
+		list_del(&ct->safe_list);
+	spin_unlock_bh(&nf_conntrack_lock);
+#endif
 	nf_ct_ext_destroy(ct);
 	atomic_dec(&net->ct.count);
 	nf_ct_ext_free(ct);
@@ -582,6 +710,10 @@ init_conntrack(struct net *net,
 	nf_ct_acct_ext_add(ct, GFP_ATOMIC);
 
 	spin_lock_bh(&nf_conntrack_lock);
+#if defined(CONFIG_MIPS_BRCM)
+	/* bugfix for lost connections */
+	list_add_tail(&ct->safe_list, &safe_list);
+#endif
 	exp = nf_ct_find_expectation(net, tuple);
 	if (exp) {
 		pr_debug("conntrack: expectation arrives ct=%p exp=%p\n",
@@ -589,6 +721,13 @@ init_conntrack(struct net *net,
 		/* Welcome, Mr. Bond.  We've been expecting you... */
 		__set_bit(IPS_EXPECTED_BIT, &ct->status);
 		ct->master = exp->master;
+#if defined(CONFIG_MIPS_BRCM)
+		list_add(&ct->derived_list,
+			 &exp->master->derived_connections);
+		if (exp->flags & NF_CT_EXPECT_DERIVED_TIMEOUT) {
+			ct->derived_timeout = exp->derived_timeout;
+		}
+#endif
 		if (exp->helper) {
 			help = nf_ct_helper_ext_add(ct, GFP_ATOMIC);
 			if (help)
@@ -679,6 +818,34 @@ resolve_normal_ct(struct net *net,
 	}
 	skb->nfct = &ct->ct_general;
 	skb->nfctinfo = *ctinfo;
+#if defined(CONFIG_MIPS_BRCM) && defined(CONFIG_BLOG)
+	{
+		struct nf_conn_help * help = nfct_help(ct);
+
+		if ( (help != (struct nf_conn_help *)NULL) &&
+			 (help->helper != (struct nf_conntrack_helper *)NULL) )
+		{
+			pr_debug("nf_conntrack_in: skb<%p> ct<%p> helper<%s> found\n",
+						skb, ct, help->helper->name);
+			clear_bit(IPS_BLOG_BIT, &ct->status);
+		}
+		if (test_bit(IPS_BLOG_BIT, &ct->status))    /* OK to blog ? */
+		{
+			uint32_t ct_type=(l3num==PF_INET)?BLOG_PARAM2_IPV4:BLOG_PARAM2_IPV6;
+			pr_debug("nf_conntrack_in: skb<%p> blog<%p> ct<%p>\n",
+						skb, blog_ptr(skb), ct );
+			blog_link(FLOWTRACK, blog_ptr(skb),
+					  (void*)ct, CTINFO2DIR(skb->nfctinfo), ct_type);
+		}
+		else
+		{
+			pr_debug("nf_conntrack_in: skb<%p> ct<%p> NOT BLOGible<%p>\n",
+						skb, ct, blog_ptr(skb));
+			blog_skip(skb);                         /* No blogging */
+		}
+	}
+#endif
+
 	return ct;
 }
 
@@ -757,6 +924,17 @@ nf_conntrack_in(struct net *net, u_int8_t pf, unsigned int hooknum,
 
 	if (set_reply && !test_and_set_bit(IPS_SEEN_REPLY_BIT, &ct->status))
 		nf_conntrack_event_cache(IPCT_STATUS, ct);
+
+#ifdef CONFIG_MIPS_BRCM
+	/* Maintain LRU list. The least recently used ctt is on the head */
+	if (ctinfo == IP_CT_ESTABLISHED ||
+	    ctinfo == IP_CT_ESTABLISHED + IP_CT_IS_REPLY) {
+		spin_lock_bh(&nf_conntrack_lock);
+		/* Update ct as latest used */
+		list_move_tail(&ct->safe_list, &safe_list);
+		spin_unlock_bh(&nf_conntrack_lock);
+	}
+#endif
 
 	return ret;
 }
@@ -1042,12 +1220,26 @@ static void nf_conntrack_cleanup_init_net(void)
 
 static void nf_conntrack_cleanup_net(struct net *net)
 {
+#if defined(CONFIG_MIPS_BRCM)
+	int try_counter = 0;
+	unsigned long start = jiffies;
+	unsigned long end = start + HZ;
+#endif
 	nf_ct_event_cache_flush(net);
 	nf_conntrack_ecache_fini(net);
  i_see_dead_people:
 	nf_conntrack_flush(net, 0, 0);
 	if (atomic_read(&net->ct.count) != 0) {
-		schedule();
+#ifdef CONFIG_MIPS_BRCM
+		if (jiffies >= end) {
+			printk("waiting for %d conntrack to be cleaned, "
+			       "tried %d times\n",
+			       atomic_read(&net->ct.count), try_counter);
+			end += HZ;
+		}
+		try_counter++;
+#endif
+	schedule();
 		goto i_see_dead_people;
 	}
 	/* wait until all references to nf_conntrack_untracked are dropped */
@@ -1059,6 +1251,13 @@ static void nf_conntrack_cleanup_net(struct net *net)
 	nf_conntrack_acct_fini(net);
 	nf_conntrack_expect_fini(net);
 	free_percpu(net->ct.stat);
+#if defined(CONFIG_MIPS_BRCM)
+	end = jiffies;
+	if (end - start > HZ) {
+		printk("nf_conntrack took %lu milliseconds to clean up\n",
+		       (end - start) * 1000 / HZ);
+	}
+#endif
 }
 
 /* Mishearing the voices in his head, our hero wonders how he's
@@ -1256,6 +1455,10 @@ static int nf_conntrack_init_net(struct net *net)
 	atomic_set(&nf_conntrack_untracked.ct_general.use, 1);
 	/*  - and look it like as a confirmed connection */
 	set_bit(IPS_CONFIRMED_BIT, &nf_conntrack_untracked.status);
+
+#if defined(CONFIG_MIPS_BRCM) && defined(CONFIG_BLOG)
+	blog_refresh_fn = (blog_refresh_t)__nf_ct_refresh_acct;
+#endif
 
 	return 0;
 

@@ -1429,6 +1429,7 @@ long do_fork(unsigned long clone_flags,
 		} else {
 			wake_up_new_task(p, clone_flags);
 		}
+		
 
 		tracehook_report_clone_complete(trace, regs,
 						clone_flags, nr, p);

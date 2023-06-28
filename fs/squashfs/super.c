@@ -45,6 +45,12 @@
 static struct file_system_type squashfs_fs_type;
 static struct super_operations squashfs_super_ops;
 
+#ifdef SQUASHFS_LZMA_ENABLE
+#include "squashfs_swap.h"
+//Global pointer to sqlzma:
+DEFINE_PER_CPU(struct sqlzma *, sqlzma);
+#endif
+
 static int supported_squashfs_filesystem(short major, short minor, short comp)
 {
 	if (major < SQUASHFS_MAJOR) {
@@ -85,24 +91,27 @@ static int squashfs_fill_super(struct super_block *sb, void *data, int silent)
 		return -ENOMEM;
 	}
 	msblk = sb->s_fs_info;
-
+#ifndef SQUASHFS_LZMA_ENABLE
 	msblk->stream.workspace = kmalloc(zlib_inflate_workspacesize(),
 		GFP_KERNEL);
 	if (msblk->stream.workspace == NULL) {
 		ERROR("Failed to allocate zlib workspace\n");
 		goto failure;
 	}
-
+#endif
 	sblk = kzalloc(sizeof(*sblk), GFP_KERNEL);
 	if (sblk == NULL) {
 		ERROR("Failed to allocate squashfs_super_block\n");
+		err = -ENOMEM;
 		goto failure;
 	}
 
 	msblk->devblksize = sb_min_blocksize(sb, BLOCK_SIZE);
 	msblk->devblksize_log2 = ffz(~msblk->devblksize);
 
+#ifndef SQUASHFS_LZMA_ENABLE
 	mutex_init(&msblk->read_data_mutex);
+#endif
 	mutex_init(&msblk->meta_index_mutex);
 
 	/*
@@ -121,6 +130,31 @@ static int squashfs_fill_super(struct super_block *sb, void *data, int silent)
 
 	/* Check it is a SQUASHFS superblock */
 	sb->s_magic = le32_to_cpu(sblk->s_magic);
+#ifdef SQUASHFS_LZMA_ENABLE
+	msblk->swap = 0;
+
+	switch (sb->s_magic) {
+		struct squashfs_super_block ssblk;
+
+	//case SQUASHFS_MAGIC_SWAP:
+		/*FALLTHROUGH*/
+	case SQUASHFS_MAGIC_LZMA_SWAP:
+		WARNING("Mounting a different endian SQUASHFS "
+			"filesystem on %s\n", bdevname(sb->s_bdev, b));
+
+		SQUASHFS_SWAP_SUPER_BLOCK(&ssblk, sblk);
+		memcpy(sblk, &ssblk, sizeof(struct squashfs_super_block));
+		msblk->swap = 1;
+		/*FALLTHROUGH*/
+	case SQUASHFS_MAGIC:
+	case SQUASHFS_MAGIC_LZMA:
+		break;
+	default:
+		ERROR("Can't find a SQUASHFS superblock on %s\n",
+		       bdevname(sb->s_bdev, b));
+		goto failed_mount;
+	}
+#else
 	if (sb->s_magic != SQUASHFS_MAGIC) {
 		if (!silent)
 			ERROR("Can't find a SQUASHFS superblock on %s\n",
@@ -128,11 +162,13 @@ static int squashfs_fill_super(struct super_block *sb, void *data, int silent)
 		err = -EINVAL;
 		goto failed_mount;
 	}
+#endif
 
 	/* Check the MAJOR & MINOR versions and compression type */
 	err = supported_squashfs_filesystem(le16_to_cpu(sblk->s_major),
 			le16_to_cpu(sblk->s_minor),
 			le16_to_cpu(sblk->compression));
+
 	if (err < 0)
 		goto failed_mount;
 
@@ -294,14 +330,18 @@ failed_mount:
 	kfree(msblk->inode_lookup_table);
 	kfree(msblk->fragment_index);
 	kfree(msblk->id_table);
+#ifndef SQUASHFS_LZMA_ENABLE
 	kfree(msblk->stream.workspace);
+#endif
 	kfree(sb->s_fs_info);
 	sb->s_fs_info = NULL;
 	kfree(sblk);
 	return err;
 
 failure:
+#ifndef SQUASHFS_LZMA_ENABLE
 	kfree(msblk->stream.workspace);
+#endif
 	kfree(sb->s_fs_info);
 	sb->s_fs_info = NULL;
 	return -ENOMEM;
@@ -315,7 +355,11 @@ static int squashfs_statfs(struct dentry *dentry, struct kstatfs *buf)
 
 	TRACE("Entered squashfs_statfs\n");
 
+#ifdef SQUASHFS_LZMA_ENABLE
+	buf->f_type = dentry->d_sb->s_magic;
+#else
 	buf->f_type = SQUASHFS_MAGIC;
+#endif
 	buf->f_bsize = msblk->block_size;
 	buf->f_blocks = ((msblk->bytes_used - 1) >> msblk->block_log) + 1;
 	buf->f_bfree = buf->f_bavail = 0;
@@ -346,12 +390,32 @@ static void squashfs_put_super(struct super_block *sb)
 		kfree(sbi->id_table);
 		kfree(sbi->fragment_index);
 		kfree(sbi->meta_index);
+#ifndef SQUASHFS_LZMA_ENABLE		
 		kfree(sbi->stream.workspace);
+#endif
 		kfree(sb->s_fs_info);
 		sb->s_fs_info = NULL;
 	}
 }
 
+#ifdef SQUASHFS_LZMA_ENABLE
+static void free_sqlzma(void)
+{
+	int cpu;
+	struct sqlzma *p;
+
+	for_each_online_cpu(cpu) {
+		p = per_cpu(sqlzma, cpu);
+		if (p) {
+#ifdef KeepPreemptive
+			mutex_destroy(&p->mtx);
+#endif
+			sqlzma_fin(&p->un);
+			kfree(p);
+		}
+	}
+}
+#endif
 
 static int squashfs_get_sb(struct file_system_type *fs_type, int flags,
 				const char *dev_name, void *data,
@@ -391,19 +455,52 @@ static void destroy_inodecache(void)
 
 static int __init init_squashfs_fs(void)
 {
+	struct sqlzma *p;
+	int cpu;
 	int err = init_inodecache();
 
 	if (err)
 		return err;
 
+#ifdef SQUASHFS_LZMA_ENABLE
+	for_each_online_cpu(cpu) {
+		dpri("%d: %p\n", cpu, per_cpu(sqlzma, cpu));
+		err = -ENOMEM;
+		p = kmalloc(sizeof(struct sqlzma), GFP_KERNEL);
+		if (p) {
+#ifdef KeepPreemptive
+			mutex_init(&p->mtx);
+#endif
+			err = sqlzma_init(&p->un, 1, 0);
+			if (unlikely(err)) {
+				ERROR("Failed to intialize uncompress workspace\n");
+				break;
+			}
+			per_cpu(sqlzma, cpu) = p;
+			err = 0;
+		} else
+			break;
+	}
+	if (unlikely(err)) {
+		free_sqlzma();
+		return err;
+	}
+#endif
+
 	err = register_filesystem(&squashfs_fs_type);
-	if (err) {
+	if (err) 
+	{
+#ifdef SQUASHFS_LZMA_ENABLE
+		free_sqlzma();
+#endif
 		destroy_inodecache();
 		return err;
 	}
 
-	printk(KERN_INFO "squashfs: version 4.0 (2009/01/31) "
-		"Phillip Lougher\n");
+	printk(KERN_INFO "squashfs: version 4.0 (2009/01/31) " "Phillip Lougher\n");
+#ifdef SQUASHFS_LZMA_ENABLE	
+	printk(KERN_INFO "squashfs: version 4.0 with LZMA457 ported by BRCM\n");
+#endif
 
 	return 0;
 }
@@ -449,6 +546,10 @@ static struct super_operations squashfs_super_ops = {
 
 module_init(init_squashfs_fs);
 module_exit(exit_squashfs_fs);
+#ifdef SQUASHFS_LZMA_ENABLE	
+	MODULE_DESCRIPTION("squashfs 4.0, a compressed read-only filesystem with LZMA457 supported\n");
+#else
 MODULE_DESCRIPTION("squashfs 4.0, a compressed read-only filesystem");
+#endif
 MODULE_AUTHOR("Phillip Lougher <phillip@lougher.demon.co.uk>");
 MODULE_LICENSE("GPL");

@@ -104,6 +104,9 @@ static const struct trans_ctl_table trans_kern_table[] = {
 	{ KERN_MAX_LOCK_DEPTH,		"max_lock_depth" },
 	{ KERN_NMI_WATCHDOG,		"nmi_watchdog" },
 	{ KERN_PANIC_ON_NMI,		"panic_on_unrecovered_nmi" },
+#ifdef CONFIG_MIPS_BRCM
+	{ KERN_PRINTK_WITH_INTERRUPTS_ENABLED,	"printk_with_interrupts_enabled" },
+#endif
 	{}
 };
 

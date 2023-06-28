@@ -8,6 +8,7 @@
 #ifndef _NET_DST_H
 #define _NET_DST_H
 
+#include <net/dst_ops.h>
 #include <linux/netdevice.h>
 #include <linux/rtnetlink.h>
 #include <linux/rcupdate.h>
@@ -103,6 +104,7 @@ struct dst_entry
 };
 
 
+#if 0
 struct dst_ops
 {
 	unsigned short		family;
@@ -123,6 +125,7 @@ struct dst_ops
 	struct kmem_cache 		*kmem_cachep;
 	struct net              *dst_net;
 };
+#endif
 
 #ifdef __KERNEL__
 

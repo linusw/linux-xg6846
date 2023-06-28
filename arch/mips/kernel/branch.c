@@ -27,6 +27,7 @@ int __compute_return_epc(struct pt_regs *regs)
 	long epc;
 	union mips_instruction insn;
 
+
 	epc = regs->cp0_epc;
 	if (epc & 3)
 		goto unaligned;

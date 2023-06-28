@@ -64,7 +64,7 @@ register struct thread_info *__current_thread_info __asm__("$28");
 
 /* thread information allocation */
 #if defined(CONFIG_PAGE_SIZE_4KB) && defined(CONFIG_32BIT)
-#define THREAD_SIZE_ORDER (1)
+#define THREAD_SIZE_ORDER (2)
 #endif
 #if defined(CONFIG_PAGE_SIZE_4KB) && defined(CONFIG_64BIT)
 #define THREAD_SIZE_ORDER (2)

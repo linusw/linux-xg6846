@@ -206,4 +206,26 @@ struct ustat {
 
 #endif	/* __KERNEL__ */
 #endif /*  __ASSEMBLY__ */
+
+#ifdef CFG_LINUX_NET_PACKED
+#define LINUX_NET_PACKED __attribute__((packed))
+#else
+#define LINUX_NET_PACKED 
+#endif
+
+struct packed_uint8 {
+    __u8 u8;
+} LINUX_NET_PACKED;
+typedef struct packed_uint8 packed_uint8_t;
+
+struct packed_uint16 {
+    __u16 u16;
+} LINUX_NET_PACKED;
+typedef struct packed_uint16 packed_uint16_t;
+
+struct packed_uint32 {
+    __u32 u32;
+} LINUX_NET_PACKED;
+typedef struct packed_uint32 packed_uint32_t;
+
 #endif /* _LINUX_TYPES_H */

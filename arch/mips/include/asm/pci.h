@@ -56,7 +56,7 @@ extern void register_pci_controller(struct pci_controller *hose);
 /*
  * board supplied pci irq fixup routine
  */
-extern int pcibios_map_irq(const struct pci_dev *dev, u8 slot, u8 pin);
+extern int pcibios_map_irq(struct pci_dev *dev, u8 slot, u8 pin);
 
 
 /* Can be used to override the logic in pci_scan_bus for skipping
@@ -155,6 +155,7 @@ pcibios_select_root(struct pci_dev *pdev, struct resource *res)
 	return root;
 }
 
+#ifdef CONFIG_PCI_DOMAINS
 #define pci_domain_nr(bus) ((struct pci_controller *)(bus)->sysdata)->index
 
 static inline int pci_proc_domain(struct pci_bus *bus)
@@ -162,6 +163,7 @@ static inline int pci_proc_domain(struct pci_bus *bus)
 	struct pci_controller *hose = bus->sysdata;
 	return hose->need_domain_info;
 }
+#endif
 
 #endif /* __KERNEL__ */
 

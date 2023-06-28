@@ -109,8 +109,9 @@ else
 debug_flags =
 endif
 
+# CONFIG_MIPS_BRCM: pass additional flag into build to make compiler warnings fatal
 orig_c_flags   = $(KBUILD_CPPFLAGS) $(KBUILD_CFLAGS) $(KBUILD_SUBDIR_CCFLAGS) \
-                 $(ccflags-y) $(CFLAGS_$(basetarget).o)
+                 $(BCM_FATAL_FLAGS) $(ccflags-y) $(CFLAGS_$(basetarget).o)
 _c_flags       = $(filter-out $(CFLAGS_REMOVE_$(basetarget).o), $(orig_c_flags))
 _a_flags       = $(KBUILD_CPPFLAGS) $(KBUILD_AFLAGS) $(KBUILD_SUBDIR_ASFLAGS) \
                  $(asflags-y) $(AFLAGS_$(basetarget).o)

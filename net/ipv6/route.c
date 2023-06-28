@@ -60,6 +60,8 @@
 #include <linux/sysctl.h>
 #endif
 
+#include <net/dst_ops.h>
+
 /* Set to 3 to get tracing. */
 #define RT6_DEBUG 2
 
@@ -784,6 +786,17 @@ void ip6_route_input(struct sk_buff *skb)
 	struct ipv6hdr *iph = ipv6_hdr(skb);
 	struct net *net = dev_net(skb->dev);
 	int flags = RT6_LOOKUP_F_HAS_SADDR;
+#if defined(CONFIG_MIPS_BRCM)
+	struct flowi fl = {0};
+
+	fl.iif  = skb->dev->ifindex;
+	fl.mark = skb->mark;
+	fl.proto = iph->nexthdr;
+	ipv6_addr_copy(&fl.fl6_dst, &iph->daddr);
+	ipv6_addr_copy(&fl.fl6_src, &iph->saddr);
+	memcpy(&fl.fl6_flowlabel, iph, sizeof(__be32));
+	fl.fl6_flowlabel &= IPV6_FLOWINFO_MASK;
+#else
 	struct flowi fl = {
 		.iif = skb->dev->ifindex,
 		.nl_u = {
@@ -796,6 +809,7 @@ void ip6_route_input(struct sk_buff *skb)
 		.mark = skb->mark,
 		.proto = iph->nexthdr,
 	};
+#endif
 
 	if (rt6_need_strict(&iph->daddr) && skb->dev->type != ARPHRD_PIMREG)
 		flags |= RT6_LOOKUP_F_IFACE;
@@ -1061,6 +1075,7 @@ static int ip6_dst_gc(struct dst_ops *ops)
 {
 	unsigned long now = jiffies;
 	struct net *net = ops->dst_net;
+
 	int rt_min_interval = net->ipv6.sysctl.ip6_rt_gc_min_interval;
 	int rt_max_size = net->ipv6.sysctl.ip6_rt_max_size;
 	int rt_elasticity = net->ipv6.sysctl.ip6_rt_gc_elasticity;

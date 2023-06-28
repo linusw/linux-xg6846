@@ -251,6 +251,14 @@ struct sockaddr_in {
 #include <asm/byteorder.h> 
 
 #ifdef __KERNEL__
+#ifdef CONFIG_MIPS_BRCM
+/* Some random defines to make it easier in the kernel.. */
+#define LOOPBACK(x)	(((x) & htonl(0xff000000)) == htonl(0x7f000000))
+#define MULTICAST(x)	(((x) & htonl(0xf0000000)) == htonl(0xe0000000))
+#define BADCLASS(x)	(((x) & htonl(0xf0000000)) == htonl(0xf0000000))
+#define ZERONET(x)	(((x) & htonl(0xff000000)) == htonl(0x00000000))
+#define LOCAL_MCAST(x)	(((x) & htonl(0xFFFFFF00)) == htonl(0xE0000000))
+#endif //CONFIG_MIPS_BRCM
 
 static inline bool ipv4_is_loopback(__be32 addr)
 {

@@ -633,13 +633,13 @@ void __sock_recv_timestamp(struct msghdr *msg, struct sock *sk,
 		__net_timestamp(skb);
 
 	if (need_software_tstamp) {
-		if (!sock_flag(sk, SOCK_RCVTSTAMPNS)) {
-			struct timeval tv;
+	if (!sock_flag(sk, SOCK_RCVTSTAMPNS)) {
+		struct timeval tv;
 			skb_get_timestamp(skb, &tv);
 			put_cmsg(msg, SOL_SOCKET, SCM_TIMESTAMP,
 				 sizeof(tv), &tv);
-		} else {
-			struct timespec ts;
+	} else {
+		struct timespec ts;
 			skb_get_timestampns(skb, &ts);
 			put_cmsg(msg, SOL_SOCKET, SCM_TIMESTAMPNS,
 				 sizeof(ts), &ts);
@@ -873,6 +873,20 @@ void vlan_ioctl_set(int (*hook) (struct net *, void __user *))
 }
 
 EXPORT_SYMBOL(vlan_ioctl_set);
+
+#if defined(CONFIG_MIPS_BRCM)
+static DEFINE_MUTEX(smux_ioctl_mutex);
+static int (*smux_ioctl_hook) (void __user *arg);
+
+void smux_ioctl_set(int (*hook) (void __user *))
+{
+	mutex_lock(&smux_ioctl_mutex);
+	smux_ioctl_hook = hook;
+	mutex_unlock(&smux_ioctl_mutex);
+}
+
+EXPORT_SYMBOL(smux_ioctl_set);
+#endif /* CONFIG_MIPS_BRCM */
 
 static DEFINE_MUTEX(dlci_ioctl_mutex);
 static int (*dlci_ioctl_hook) (unsigned int, void __user *);

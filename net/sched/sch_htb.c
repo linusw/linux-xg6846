@@ -38,6 +38,9 @@
 #include <linux/workqueue.h>
 #include <net/netlink.h>
 #include <net/pkt_sched.h>
+#if defined(CONFIG_MIPS_BRCM)
+#include <linux/blog.h>
+#endif
 
 /* HTB algorithm.
     Author: devik@cdi.cz
@@ -891,13 +894,16 @@ static struct sk_buff *htb_dequeue(struct Qdisc *sch)
 			if (likely(skb != NULL)) {
 				sch->q.qlen--;
 				sch->flags &= ~TCQ_F_THROTTLED;
+#if defined(CONFIG_MIPS_BRCM) && defined(CONFIG_BLOG)
+				blog_skip(skb);
+#endif
 				goto fin;
 			}
 		}
 	}
 	sch->qstats.overlimits++;
 	if (likely(next_event > q->now))
-		qdisc_watchdog_schedule(&q->watchdog, next_event);
+	qdisc_watchdog_schedule(&q->watchdog, next_event);
 	else
 		schedule_work(&q->work);
 fin:

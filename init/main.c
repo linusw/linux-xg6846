@@ -86,6 +86,7 @@ extern void sbus_init(void);
 extern void prio_tree_init(void);
 extern void radix_tree_init(void);
 extern void free_initmem(void);
+extern void bcmLog_init(void);
 #ifdef	CONFIG_ACPI
 extern void acpi_early_init(void);
 #else
@@ -107,6 +108,15 @@ EXPORT_SYMBOL(system_state);
  */
 #define MAX_INIT_ARGS CONFIG_INIT_ENV_ARG_LIMIT
 #define MAX_INIT_ENVS CONFIG_INIT_ENV_ARG_LIMIT
+
+#ifdef CONFIG_MIPS_BRCM
+extern void __init allocDspModBuffers(void);
+
+#ifdef CONFIG_BCM_GPON_DDRO
+extern void __init allocGponDDROBuffers(void);
+#endif /* CONFIG_BCM_GPON_DDRO */
+
+#endif /* CONFIG_MIPS_BRCM */
 
 extern void time_init(void);
 /* Default late time init is NULL. archs can override this later. */
@@ -648,6 +658,19 @@ asmlinkage void __init start_kernel(void)
 	vmalloc_init();
 	vfs_caches_init_early();
 	cpuset_init_early();
+
+#ifdef CONFIG_MIPS_BRCM
+	/*
+	** Allocate boot time memory for the special DSP module. This allocation can be 
+	** possible only before mem_init(). Please ensure that this allocation is performed 
+	** before mem_init().
+	*/
+	allocDspModBuffers();
+
+#ifdef CONFIG_BCM_GPON_DDRO
+    allocGponDDROBuffers();
+#endif /* CONFIG_BCM_GPON_DDRO */
+#endif /* CONFIG_MIPS_BRCM */
 	page_cgroup_init();
 	mem_init();
 	enable_debug_pagealloc();
@@ -694,7 +717,9 @@ asmlinkage void __init start_kernel(void)
 	acpi_early_init(); /* before LAPIC and SMP init */
 
 	ftrace_init();
-
+#ifdef CONFIG_BCM_LOG
+	bcmLog_init();
+#endif
 	/* Do the rest non-__init'ed, we're now alive */
 	rest_init();
 }
@@ -789,6 +814,17 @@ static void __init do_pre_smp_initcalls(void)
 	for (call = __initcall_start; call < __early_initcall_end; call++)
 		do_one_initcall(*call);
 }
+
+#if defined(CONFIG_BRCM_IKOS)
+/* This function needs to link at address 0x80010400.  The IKOS boot loader
+ * currently used unconditionally jumps to this address.
+ */
+void noinline jump_to_kernel_entry(void)
+{
+    extern void kernel_entry(void);
+    kernel_entry();
+}
+#endif
 
 static void run_init_process(char *init_filename)
 {

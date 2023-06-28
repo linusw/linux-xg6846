@@ -251,11 +251,21 @@ static int ip_local_deliver_finish(struct sk_buff *skb)
 	return 0;
 }
 
+#if defined(CONFIG_XAVI_SWITCH_DRIVER) && defined(XAVI_SWITCH_TYPE_MV88E6352) && defined(CONFIG_XAVI_PORT_LIMIT)
+int (*xavi_port_limit_func) (struct sk_buff *skb);
+EXPORT_SYMBOL(xavi_port_limit_func);
+#endif
 /*
  * 	Deliver IP Packets to the higher protocol layers.
  */
 int ip_local_deliver(struct sk_buff *skb)
 {
+#if defined(CONFIG_XAVI_SWITCH_DRIVER) && defined(XAVI_SWITCH_TYPE_MV88E6352) && defined(CONFIG_XAVI_PORT_LIMIT)
+        if (xavi_port_limit_func != NULL) {
+            if (xavi_port_limit_func(skb) != 0)
+                return -1;
+	}
+#endif
 	/*
 	 *	Reassemble IP fragments.
 	 */
@@ -320,6 +330,11 @@ drop:
 	return -1;
 }
 
+/* This and several other changes in the file are for avoiding unaligned accesses. Merged from brcm 2.6.8 kernel changes.*/
+#if defined(CONFIG_MIPS_BRCM) 
+#define READ32_ALIGNED(a) ((((__u16 *) &(a))[0]<<16)|((__u16 *) &(a))[1])
+#endif
+
 static int ip_rcv_finish(struct sk_buff *skb)
 {
 	const struct iphdr *iph = ip_hdr(skb);
@@ -330,7 +345,7 @@ static int ip_rcv_finish(struct sk_buff *skb)
 	 *	how the packet travels inside Linux networking.
 	 */
 	if (skb->dst == NULL) {
-		int err = ip_route_input(skb, iph->daddr, iph->saddr, iph->tos,
+		int err = ip_route_input(skb, READ32_ALIGNED(iph->daddr), READ32_ALIGNED(iph->saddr), iph->tos,
 					 skb->dev);
 		if (unlikely(err)) {
 			if (err == -EHOSTUNREACH)
@@ -377,6 +392,10 @@ int ip_rcv(struct sk_buff *skb, struct net_device *dev, struct packet_type *pt, 
 {
 	struct iphdr *iph;
 	u32 len;
+#if defined(CONFIG_MIPS_BRCM)
+	__u8 iph_ihl, iph_version;
+#endif
+
 
 	/* When the interface is in promisc. mode, drop all the crap
 	 * that it receives, do not try to analyse it.
@@ -407,15 +426,30 @@ int ip_rcv(struct sk_buff *skb, struct net_device *dev, struct packet_type *pt, 
 	 *	4.	Doesn't have a bogus length
 	 */
 
+#if defined(CONFIG_MIPS_BRCM)
+	iph_ihl = *(__u8 *)iph & 0xf;
+	iph_version = *(__u8 *)iph >> 4;
+
+	if (iph_ihl < 5 || iph_version != 4)
+#else
 	if (iph->ihl < 5 || iph->version != 4)
+#endif
 		goto inhdr_error;
 
+#if defined(CONFIG_MIPS_BRCM)
+	if (!pskb_may_pull(skb, iph_ihl*4))
+#else
 	if (!pskb_may_pull(skb, iph->ihl*4))
+#endif
 		goto inhdr_error;
 
 	iph = ip_hdr(skb);
 
+#if defined(CONFIG_MIPS_BRCM)
+	if (unlikely(ip_fast_csum((u8 *)iph, iph_ihl)))
+#else
 	if (unlikely(ip_fast_csum((u8 *)iph, iph->ihl)))
+#endif
 		goto inhdr_error;
 
 	len = ntohs(iph->tot_len);

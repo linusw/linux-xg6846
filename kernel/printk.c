@@ -50,7 +50,11 @@ void asmlinkage __attribute__((weak)) early_printk(const char *fmt, ...)
 
 /* We show everything that is MORE important than this.. */
 #define MINIMUM_CONSOLE_LOGLEVEL 1 /* Minimum loglevel we let people use */
+#ifdef CONFIG_MIPS_BRCM
+#define DEFAULT_CONSOLE_LOGLEVEL CONFIG_BCM_DEFAULT_CONSOLE_LOGLEVEL
+#else
 #define DEFAULT_CONSOLE_LOGLEVEL 7 /* anything MORE serious than KERN_DEBUG */
+#endif
 
 DECLARE_WAIT_QUEUE_HEAD(log_wait);
 
@@ -60,6 +64,10 @@ int console_printk[4] = {
 	MINIMUM_CONSOLE_LOGLEVEL,	/* minimum_console_loglevel */
 	DEFAULT_CONSOLE_LOGLEVEL,	/* default_console_loglevel */
 };
+
+#ifdef CONFIG_MIPS_BRCM
+int printk_with_interrupts_enabled = 0;
+#endif
 
 /*
  * Low level drivers may need that to know if they can schedule in
@@ -642,6 +650,9 @@ static char printk_buf[1024];
 
 asmlinkage int vprintk(const char *fmt, va_list args)
 {
+#ifdef CONFIG_MIPS_BRCM
+	int int_lock_released = 0;
+#endif	
 	int printed_len = 0;
 	int current_log_level = default_message_loglevel;
 	unsigned long flags;
@@ -746,12 +757,32 @@ asmlinkage int vprintk(const char *fmt, va_list args)
 	 * actually gets the semaphore or not.
 	 */
 	if (acquire_console_semaphore_for_printk(this_cpu))
+	{
+#ifdef CONFIG_MIPS_BRCM
+		if ( printk_with_interrupts_enabled )
+		{
+			lockdep_on();
+			raw_local_irq_restore(flags);
+			int_lock_released = 1;
+		}
+#endif		
 		release_console_sem();
+	}
+
+	
+#ifdef CONFIG_MIPS_BRCM
+	if ( int_lock_released )
+	{
+		goto out;
+	}
+#endif
 
 	lockdep_on();
 out_restore_irqs:
 	raw_local_irq_restore(flags);
-
+#ifdef CONFIG_MIPS_BRCM
+out:
+#endif
 	preempt_enable();
 	return printed_len;
 }
@@ -999,6 +1030,9 @@ void release_console_sem(void)
 	unsigned long flags;
 	unsigned _con_start, _log_end;
 	unsigned wake_klogd = 0;
+#ifdef CONFIG_MIPS_BRCM
+	int int_lock_released = 0;
+#endif	
 
 	if (console_suspended) {
 		up(&console_sem);
@@ -1015,11 +1049,25 @@ void release_console_sem(void)
 		_con_start = con_start;
 		_log_end = log_end;
 		con_start = log_end;		/* Flush */
+#ifdef CONFIG_MIPS_BRCM		
+		int_lock_released = 0;
+		if ( printk_with_interrupts_enabled )
+		{
+			spin_unlock_irqrestore(&logbuf_lock, flags);
+			int_lock_released = 1;
+		}
+		else
+#endif		
 		spin_unlock(&logbuf_lock);
+
 		stop_critical_timings();	/* don't trace print latency */
 		call_console_drivers(_con_start, _log_end);
 		start_critical_timings();
-		local_irq_restore(flags);
+#ifdef CONFIG_MIPS_BRCM
+		if ( !int_lock_released )
+#endif
+			local_irq_restore(flags);
+
 	}
 	console_locked = 0;
 	up(&console_sem);

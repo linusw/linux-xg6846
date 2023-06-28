@@ -193,6 +193,10 @@ typedef enum {
 /* This option is defined if the board driver allocates its own buffers
    (e.g. because it needs them DMA-coherent */
 #define NAND_OWN_BUFFERS	0x00040000
+
+/* For Hynix MLC flashes, the BI are written to last and (last-2) pages. */
+#define NAND_SCAN_BI_3RD_PAGE	0x00100000
+
 /* Options set by nand scan */
 /* Nand scan has allocated controller struct */
 #define NAND_CONTROLLER_ALLOC	0x80000000
@@ -492,9 +496,10 @@ extern struct nand_manufacturers nand_manuf_ids[];
  * that the pattern and the version count are always located in the oob area
  * of the first block.
  */
+#define BBT_NULL_PAGE (-1LL)
 struct nand_bbt_descr {
 	int	options;
-	int	pages[NAND_MAX_CHIPS];
+	uint64_t pages[NAND_MAX_CHIPS];
 	int	offs;
 	int	veroffs;
 	uint8_t	version[NAND_MAX_CHIPS];

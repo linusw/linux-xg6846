@@ -30,6 +30,10 @@ obj-$(CONFIG_NF_NAT_PPTP) += nf_nat_pptp.o
 obj-$(CONFIG_NF_NAT_SIP) += nf_nat_sip.o
 obj-$(CONFIG_NF_NAT_SNMP_BASIC) += nf_nat_snmp_basic.o
 obj-$(CONFIG_NF_NAT_TFTP) += nf_nat_tftp.o
+#BRCM begin
+obj-$(CONFIG_NF_NAT_PT) += nf_nat_pt.o
+obj-$(CONFIG_NF_NAT_RTSP) += nf_nat_rtsp.o
+#BRCM end
 
 # NAT protocols (nf_nat)
 obj-$(CONFIG_NF_NAT_PROTO_DCCP) += nf_nat_proto_dccp.o

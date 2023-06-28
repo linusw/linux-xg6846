@@ -456,7 +456,17 @@ static inline int zone_is_oom_locked(const struct zone *zone)
  * go. A value of 12 for DEF_PRIORITY implies that we will scan 1/4096th of the
  * queues ("queue_length >> 12") during an aging round.
  */
+ 
+#if defined(CONFIG_MIPS_BRCM)
+/* We normally have only 8M~32M of RAM while desktop systems can have 4G or 
+  * more. The Linux default value of 12 means that the first iteration scans 
+  * only 1~8 pages in our system. This can cause excessive fragmentation in
+  * the buddy system and is potentially CPU inefficient. Start from a higher 
+  * priority (lower value) for more optimized memory scanning. */
+#define DEF_PRIORITY 6
+#else
 #define DEF_PRIORITY 12
+#endif
 
 /* Maximum number of zones on a zonelist */
 #define MAX_ZONES_PER_ZONELIST (MAX_NUMNODES * MAX_NR_ZONES)

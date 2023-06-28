@@ -5,6 +5,12 @@
 # Rewritten to use lists instead of if-statements.
 #
 
+ifdef CONFIG_MIPS_BRCM
+ifdef CONFIG_BRCM_BOUNCE_DATAPATH
+EXTRA_CFLAGS  += -O0 -finstrument-functions
+endif
+endif
+
 obj-y				+= gpio/
 obj-$(CONFIG_PCI)		+= pci/
 obj-$(CONFIG_PARISC)		+= parisc/

@@ -16,6 +16,10 @@
 #include <net/protocol.h>
 #include <net/udp.h>
 
+#if defined(CONFIG_MIPS_BRCM)
+#include <linux/blog.h>
+#endif
+
 struct esp_skb_cb {
 	struct xfrm_skb_cb xfrm;
 	void *tmp;
@@ -119,6 +123,10 @@ static int esp_output(struct xfrm_state *x, struct sk_buff *skb)
 	int alen;
 	int nfrags;
 
+#if defined(CONFIG_MIPS_BRCM) && defined(CONFIG_BLOG)
+	blog_skip(skb);
+#endif
+
 	/* skb is pure payload to encrypt */
 
 	err = -ENOMEM;
@@ -214,6 +222,19 @@ static int esp_output(struct xfrm_state *x, struct sk_buff *skb)
 			      XFRM_SKB_CB(skb)->seq.output);
 
 	ESP_SKB_CB(skb)->tmp = tmp;
+
+#if defined(CONFIG_MIPS_BRCM) && defined(CONFIG_BCM_SPU)
+    if((skb_headroom(skb) < 32) ||
+       (skb_tailroom(skb) < 16))
+    {
+        req->areq.alloc_buff_spu = 1;
+    }
+    else
+    {
+        req->areq.alloc_buff_spu = 0;
+    }
+#endif
+
 	err = crypto_aead_givencrypt(req);
 	if (err == -EINPROGRESS)
 		goto error;
@@ -336,6 +357,10 @@ static int esp_input(struct xfrm_state *x, struct sk_buff *skb)
 	struct scatterlist *asg;
 	int err = -EINVAL;
 
+#if defined(CONFIG_MIPS_BRCM) && defined(CONFIG_BLOG)
+	blog_skip(skb);
+#endif
+
 	if (!pskb_may_pull(skb, sizeof(*esph) + crypto_aead_ivsize(aead)))
 		goto out;
 
@@ -371,6 +396,18 @@ static int esp_input(struct xfrm_state *x, struct sk_buff *skb)
 	aead_request_set_callback(req, 0, esp_input_done, skb);
 	aead_request_set_crypt(req, sg, sg, elen, iv);
 	aead_request_set_assoc(req, asg, sizeof(*esph));
+
+#if defined(CONFIG_MIPS_BRCM) && defined(CONFIG_BCM_SPU)
+    if((skb_headroom(skb) < 32) ||
+       (skb_tailroom(skb) < 16))
+    {
+        req->alloc_buff_spu = 1;
+    }
+    else
+    {
+        req->alloc_buff_spu = 0;
+    }
+#endif
 
 	err = crypto_aead_decrypt(req);
 	if (err == -EINPROGRESS)
@@ -530,7 +567,7 @@ static int esp_init_authenc(struct xfrm_state *x)
 		}
 
 		err = crypto_aead_setauthsize(
-			aead, aalg_desc->uinfo.auth.icv_truncbits / 8);
+			aead, x->aalg->alg_trunc_len / 8);
 		if (err)
 			goto free_key;
 	}

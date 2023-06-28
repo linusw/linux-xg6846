@@ -130,8 +130,22 @@ icmp_error_message(struct net *net, struct sk_buff *skb,
 	struct nf_conntrack_tuple innertuple, origtuple;
 	const struct nf_conntrack_l4proto *innerproto;
 	const struct nf_conntrack_tuple_hash *h;
+#ifdef CFG_LINUX_NET_PACKED
+	struct {
+		struct icmphdr icmp;
+		struct iphdr ip;
+	} _in, *inside;
+#endif
+
 
 	NF_CT_ASSERT(skb->nfct == NULL);
+
+#ifdef CFG_LINUX_NET_PACKED
+	/* Not enough header? */
+	inside = skb_header_pointer(skb, ip_hdrlen(skb), sizeof(_in), &_in);
+	if (inside == NULL)
+		return -NF_ACCEPT;
+#endif
 
 	/* Are they talking about one of our connections? */
 	if (!nf_ct_get_tuplepr(skb,
@@ -143,7 +157,13 @@ icmp_error_message(struct net *net, struct sk_buff *skb,
 	}
 
 	/* rcu_read_lock()ed by nf_hook_slow */
+#ifdef CFG_LINUX_NET_PACKED
+	innerproto = __nf_ct_l4proto_find(PF_INET, inside->ip.protocol);
+	origtuple.src.u3.ip = inside->ip.saddr;
+	origtuple.dst.u3.ip = inside->ip.daddr;
+#else
 	innerproto = __nf_ct_l4proto_find(PF_INET, origtuple.dst.protonum);
+#endif
 
 	/* Ordinarily, we'd expect the inverted tupleproto, but it's
 	   been preserved inside the ICMP. */

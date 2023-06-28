@@ -328,4 +328,8 @@ source "drivers/mtd/lpddr/Kconfig"
 
 source "drivers/mtd/ubi/Kconfig"
 
+# CONFIG_MIPS_BRCM Begin Broadcom changed code.
+source "drivers/mtd/brcmnand/Kconfig"
+# CONFIG_MIPS_BRCM End Broadcom changed code.
+
 endif # MTD

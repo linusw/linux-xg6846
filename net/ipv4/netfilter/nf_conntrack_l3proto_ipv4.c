@@ -35,6 +35,11 @@ EXPORT_SYMBOL_GPL(nf_nat_seq_adjust_hook);
 static bool ipv4_pkt_to_tuple(const struct sk_buff *skb, unsigned int nhoff,
 			      struct nf_conntrack_tuple *tuple)
 {
+#ifdef CFG_LINUX_NET_PACKED
+	struct iphdr *iph = (struct iphdr *) skb->network_header;
+	tuple->src.u3.ip = iph->saddr;
+	tuple->dst.u3.ip = iph->daddr;
+#else
 	const __be32 *ap;
 	__be32 _addrs[2];
 	ap = skb_header_pointer(skb, nhoff + offsetof(struct iphdr, saddr),
@@ -44,6 +49,7 @@ static bool ipv4_pkt_to_tuple(const struct sk_buff *skb, unsigned int nhoff,
 
 	tuple->src.u3.ip = ap[0];
 	tuple->dst.u3.ip = ap[1];
+#endif
 
 	return true;
 }

@@ -48,6 +48,10 @@
 #include <net/dcbnl.h>
 #endif
 
+#if defined(CONFIG_MIPS_BRCM) && defined(CONFIG_BLOG)
+#include <linux/blog.h>
+#endif
+
 struct vlan_group;
 struct ethtool_ops;
 struct netpoll_info;
@@ -97,7 +101,7 @@ struct wireless_dev;
  *	Compute the worst case header length according to the protocols
  *	used.
  */
-
+ 
 #if defined(CONFIG_WLAN_80211) || defined(CONFIG_AX25) || defined(CONFIG_AX25_MODULE)
 # if defined(CONFIG_MAC80211_MESH)
 #  define LL_MAX_HEADER 128
@@ -125,7 +129,7 @@ struct wireless_dev;
  *	Network device statistics. Akin to the 2.0 ether stats but
  *	with byte counters.
  */
-
+ 
 struct net_device_stats
 {
 	unsigned long	rx_packets;		/* total packets received	*/
@@ -286,7 +290,7 @@ enum netdev_state_t
 
 /*
  * This structure holds at boot time configured netdevice settings. They
- * are then used in the device probing.
+ * are then used in the device probing. 
  */
 struct netdev_boot_setup {
 	char name[IFNAMSIZ];
@@ -604,6 +608,30 @@ struct net_device_ops {
 #endif
 };
 
+#if defined(CONFIG_MIPS_BRCM)
+#define NETDEV_PATH_HW_SUBPORTS_MAX  CONFIG_BCM_MAX_GEM_PORTS
+struct netdev_path
+{
+        /* this pointer is used to create lists of interfaces that belong
+           to the same interface path in Linux. It points to the next
+           interface towards the physical interface (the root interface) */
+        struct net_device *next_dev;
+        /* this reference counter indicates the number of interfaces
+           referencing this interface */
+        int refcount;
+        /* indicates the hardware port number associated to the
+           interface */
+        unsigned int hw_port;
+        /* hardware port type, must be set to one of the types defined in
+           BlogPhy_t  */
+        unsigned int hw_port_type;
+        /* some device drivers support virtual subports within a hardware
+		   port. hw_subport_mcast is used to map a multicast hw subport
+		   to a hw port. */
+        unsigned int hw_subport_mcast_idx;
+};
+#endif
+
 /*
  *	The DEVICE structure.
  *	Actually, this whole structure is a big mistake.  It mixes I/O
@@ -683,7 +711,7 @@ struct net_device
 #define NETIF_F_FSO		(SKB_GSO_FCOE << NETIF_F_GSO_SHIFT)
 
 	/* List of features with software fallbacks. */
-#define NETIF_F_GSO_SOFTWARE	(NETIF_F_TSO | NETIF_F_TSO_ECN | NETIF_F_TSO6)
+#define NETIF_F_GSO_SOFTWARE	(NETIF_F_TSO | NETIF_F_TSO_ECN | NETIF_F_TSO6 | NETIF_F_UFO)
 
 
 #define NETIF_F_GEN_CSUM	(NETIF_F_NO_CSUM | NETIF_F_HW_CSUM)
@@ -704,6 +732,17 @@ struct net_device
 	int			iflink;
 
 	struct net_device_stats	stats;
+
+#if defined(CONFIG_MIPS_BRCM) && defined(CONFIG_BLOG)
+	/* Update the bstats */
+	void (*put_stats)(struct net_device *dev_p, BlogStats_t * bStats_p);
+	/* Clear the stats information */
+	void (*clr_stats)(struct net_device *dev_p);
+#endif
+
+#if defined(CONFIG_MIPS_BRCM)
+        struct netdev_path path;
+#endif
 
 #ifdef CONFIG_WIRELESS_EXT
 	/* List of functions to handle Wireless Extensions (instead of ioctl).
@@ -763,7 +802,7 @@ struct net_device
 	void			*dsa_ptr;	/* dsa specific data */
 #endif
 	void 			*atalk_ptr;	/* AppleTalk link 	*/
-	void			*ip_ptr;	/* IPv4 specific data	*/
+	void			*ip_ptr;	/* IPv4 specific data	*/  
 	void                    *dn_ptr;        /* DECnet specific data */
 	void                    *ip6_ptr;       /* IPv6 specific data */
 	void			*ec_ptr;	/* Econet specific data	*/
@@ -776,7 +815,7 @@ struct net_device
  */
 	unsigned long		last_rx;	/* Time of last Rx	*/
 	/* Interface address info used in eth_type_trans() */
-	unsigned char		dev_addr[MAX_ADDR_LEN];	/* hw address, (before bcast
+	unsigned char		dev_addr[MAX_ADDR_LEN];	/* hw address, (before bcast 
 							   because most packets are unicast) */
 
 	unsigned char		broadcast[MAX_ADDR_LEN];	/* hw bcast add	*/
@@ -972,6 +1011,10 @@ static inline bool netdev_uses_trailer_tags(struct net_device *dev)
 	return 0;
 }
 
+#ifdef CONFIG_MIPS_BRCM
+void *netdev_priv(const struct net_device *dev);
+#define SET_MODULE_OWNER(dev) do { } while (0)
+#else
 /**
  *	netdev_priv - access network device private data
  *	@dev: network device
@@ -984,6 +1027,7 @@ static inline void *netdev_priv(const struct net_device *dev)
 			       + NETDEV_ALIGN_CONST)
 			      & ~NETDEV_ALIGN_CONST);
 }
+#endif
 
 /* Set the sysfs physical device reference for the network logical device
  * if set prior to registration will cause a symlink during initialization.
@@ -1122,6 +1166,10 @@ extern int		netpoll_trap(void);
 extern void	      *skb_gro_header(struct sk_buff *skb, unsigned int hlen);
 extern int	       skb_gro_receive(struct sk_buff **head,
 				       struct sk_buff *skb);
+
+#if defined(CONFIG_MIPS_BRCM)
+extern void dev_change_features(unsigned int features, unsigned int op);
+#endif
 
 static inline unsigned int skb_gro_offset(const struct sk_buff *skb)
 {
@@ -1908,6 +1956,51 @@ static inline int skb_bond_should_drop(struct sk_buff *skb)
 }
 
 extern struct pernet_operations __net_initdata loopback_net_ops;
+
+#if defined(CONFIG_MIPS_BRCM)
+
+/* Returns TRUE when _dev is a member of a path, otherwise FALSE */
+#define netdev_path_is_linked(_dev) ( (_dev)->path.next_dev != NULL )
+
+/* Returns TRUE when _dev is the leaf in a path, otherwise FALSE */
+#define netdev_path_is_leaf(_dev) ( (_dev)->path.refcount == 0 )
+
+/* Returns TRUE when _dev is the root of a path, otherwise FALSE. The root
+   device is the physical device */
+#define netdev_path_is_root(_dev) ( (_dev)->path.next_dev == NULL )
+
+/* Returns a pointer to the next device in a path, towards the root
+   (physical) device */
+#define netdev_path_next_dev(_dev) ( (_dev)->path.next_dev )
+
+#define netdev_path_set_hw_port(_dev, _hw_port, _hw_port_type)  \
+    do {                                                        \
+        (_dev)->path.hw_port = (_hw_port);                      \
+        (_dev)->path.hw_port_type = (_hw_port_type);            \
+    } while(0)
+
+#define netdev_path_set_hw_port_only(_dev, _hw_port)            \
+    do {                                                        \
+        (_dev)->path.hw_port = (_hw_port);                      \
+    } while(0)
+
+#define netdev_path_get_hw_port(_dev) ( (_dev)->path.hw_port )
+
+#define netdev_path_get_hw_port_type(_dev) ( (_dev)->path.hw_port_type )
+
+#define netdev_path_get_hw_subport_mcast_idx(_dev) ( (_dev)->path.hw_subport_mcast_idx )
+
+int netdev_path_add(struct net_device *new_dev, struct net_device *next_dev);
+
+int netdev_path_remove(struct net_device *dev);
+
+void netdev_path_dump(struct net_device *dev);
+
+int netdev_path_set_hw_subport_mcast_idx(struct net_device *dev,
+									 unsigned int subport_idx);
+
+#endif /* CONFIG_MIPS_BRCM */
+
 #endif /* __KERNEL__ */
 
 #endif	/* _LINUX_DEV_H */

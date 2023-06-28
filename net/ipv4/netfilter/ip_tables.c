@@ -171,6 +171,7 @@ static inline bool
 do_match(struct ipt_entry_match *m, const struct sk_buff *skb,
 	 struct xt_match_param *par)
 {
+
 	par->match     = m->u.kernel.match;
 	par->matchinfo = m->data;
 

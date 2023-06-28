@@ -129,6 +129,12 @@
 
 #include "net-sysfs.h"
 
+#if defined(CONFIG_MIPS_BRCM)
+#include "skb_defines.h"
+#endif
+#include <linux/mroute.h>
+
+
 /* Instead of increasing this, you should create a hash table. */
 #define MAX_GRO_SKBS 8
 
@@ -168,6 +174,7 @@
 
 static DEFINE_SPINLOCK(ptype_lock);
 static struct list_head ptype_base[PTYPE_HASH_SIZE] __read_mostly;
+
 static struct list_head ptype_all __read_mostly;	/* Taps */
 
 /*
@@ -192,6 +199,11 @@ static struct list_head ptype_all __read_mostly;	/* Taps */
 DEFINE_RWLOCK(dev_base_lock);
 
 EXPORT_SYMBOL(dev_base_lock);
+
+#if defined(CONFIG_MIPS_BRCM) && (defined(CONFIG_BCM_P8021AG) || defined(CONFIG_BCM_P8021AG_MODULE))
+int (*p8021ag_hook)(struct sk_buff *skb);
+EXPORT_SYMBOL(p8021ag_hook);
+#endif
 
 #define NETDEV_HASHBITS	8
 #define NETDEV_HASHENTRIES (1 << NETDEV_HASHBITS)
@@ -329,6 +341,100 @@ static inline void netdev_set_addr_lockdep_class(struct net_device *dev)
 {
 }
 #endif
+
+#ifdef CONFIG_MIPS_BRCM
+/**
+ *	netdev_priv - access network device private data
+ *	@dev: network device
+ *
+ * Get network device private data
+ */
+void *netdev_priv(const struct net_device *dev)
+{
+	return (char *)dev + ((sizeof(struct net_device)
+			       + NETDEV_ALIGN_CONST)
+			      & ~NETDEV_ALIGN_CONST);
+}
+EXPORT_SYMBOL(netdev_priv);
+#endif
+
+#if defined(CONFIG_MIPS_BRCM)
+/* Adds a NON-ROOT device to a path. A Root device is indirectly
+   added to a path once another device points to it */
+int netdev_path_add(struct net_device *new_dev, struct net_device *next_dev)
+{
+    if(netdev_path_is_linked(new_dev))
+    {
+        /* new device already in a path, fail */
+        return -EBUSY;
+    }
+
+    netdev_path_next_dev(new_dev) = next_dev;
+
+    next_dev->path.refcount++;
+
+    return 0;
+}
+
+/* Removes a device from a path */
+int netdev_path_remove(struct net_device *dev)
+{
+    if(!netdev_path_is_leaf(dev))
+    {
+        /* device referenced by one or more interfaces, fail */
+        return -EBUSY;
+    }
+
+    netdev_path_next_dev(dev)->path.refcount--;
+
+    netdev_path_next_dev(dev) = NULL;
+
+    return 0;
+}
+
+/* Prints all devices in a path */
+void netdev_path_dump(struct net_device *dev)
+{
+    printk("netdev path : ");
+
+    while(1)
+    {
+        printk("%s", dev->name);
+
+        if(netdev_path_is_root(dev))
+        {
+            break;
+        }
+
+        printk(" -> ");
+
+        dev = netdev_path_next_dev(dev);
+    }
+
+    printk("\n");
+}
+
+int netdev_path_set_hw_subport_mcast_idx(struct net_device *dev,
+                                         unsigned int subport_idx)
+{
+    if(subport_idx >= NETDEV_PATH_HW_SUBPORTS_MAX)
+    {
+        printk(KERN_ERR "%s : Invalid subport <%u>, max <%u>",
+               __FUNCTION__, subport_idx, NETDEV_PATH_HW_SUBPORTS_MAX);
+        return -1;
+    }
+
+    dev->path.hw_subport_mcast_idx = subport_idx;
+
+    return 0;
+}
+
+EXPORT_SYMBOL(netdev_path_add);
+EXPORT_SYMBOL(netdev_path_remove);
+EXPORT_SYMBOL(netdev_path_dump);
+EXPORT_SYMBOL(netdev_path_set_hw_subport_mcast_idx);
+#endif /* CONFIG_MIPS_BRCM */
+
 
 /*******************************************************************************
 
@@ -775,6 +881,39 @@ int dev_valid_name(const char *name)
 	return 1;
 }
 
+#if defined(CONFIG_MIPS_BRCM)
+/**
+ * Features changed due to FAP power up/down
+**/
+void dev_change_features(unsigned int features, unsigned int op)
+{
+    struct net *net;
+    struct net_device *dev;
+
+    write_lock_bh(&dev_base_lock);
+
+    for_each_net(net) {
+        for_each_netdev(net, dev) {
+            if(dev->priv_flags & (IFF_HW_SWITCH | IFF_EBRIDGE) )
+            {
+                if(op)
+                {
+                    /* FAP power up = add features */
+                    dev->features |= features;
+                }
+                else
+                {
+                    /* FAP powerdown = remove features */
+                    dev->features &= ~features;
+                }
+            }
+        }
+    }
+
+    write_unlock_bh(&dev_base_lock);
+}
+EXPORT_SYMBOL(dev_change_features);
+#endif
 /**
  *	__dev_alloc_name - allocate a name for a device
  *	@net: network namespace to allocate the device name in
@@ -1456,11 +1595,11 @@ void netif_device_attach(struct net_device *dev)
 }
 EXPORT_SYMBOL(netif_device_attach);
 
-static bool can_checksum_protocol(unsigned long features, __be16 protocol)
+static bool can_checksum_protocol(unsigned long features,  __be16 protocol)
 {
 	return ((features & NETIF_F_GEN_CSUM) ||
 		((features & NETIF_F_IP_CSUM) &&
-		 protocol == htons(ETH_P_IP)) ||
+		( protocol == htons(ETH_P_IP))) ||
 		((features & NETIF_F_IPV6_CSUM) &&
 		 protocol == htons(ETH_P_IPV6)) ||
 		((features & NETIF_F_FCOE_CRC) &&
@@ -1937,10 +2076,21 @@ int netif_rx(struct sk_buff *skb)
 
 	/* if netpoll wants it, pretend we never saw it */
 	if (netpoll_rx(skb))
+    {
 		return NET_RX_DROP;
-
+    }
+	
 	if (!skb->tstamp.tv64)
 		net_timestamp(skb);
+
+#if defined(CONFIG_MIPS_BRCM)
+	/*mark IFFWAN flag in skb based on dev->priv_flags */
+	if(skb->dev)
+	{
+		unsigned int mark = skb->mark;
+		skb->mark |= SKBMARK_SET_IFFWAN_MARK(mark, ((skb->dev->priv_flags & IFF_WANDEV) ? 1:0));
+	}
+#endif
 
 	/*
 	 * The code is rearranged so that the path is the most
@@ -2027,6 +2177,7 @@ static void net_tx_action(struct softirq_action *h)
 				qdisc_run(q);
 				spin_unlock(root_lock);
 			} else {
+			
 				if (!test_bit(__QDISC_STATE_DEACTIVATED,
 					      &q->state)) {
 					__netif_reschedule(q);
@@ -2036,6 +2187,7 @@ static void net_tx_action(struct softirq_action *h)
 						  &q->state);
 				}
 			}
+			
 		}
 	}
 }
@@ -2070,6 +2222,17 @@ static inline struct sk_buff *handle_bridge(struct sk_buff *skb,
 	if (skb->pkt_type == PACKET_LOOPBACK ||
 	    (port = rcu_dereference(skb->dev->br_port)) == NULL)
 		return skb;
+
+#if defined(CONFIG_MIPS_BRCM)
+   if (rcu_dereference(skb)->protocol == __constant_htons(ETH_P_PPP_SES) ||
+       rcu_dereference(skb)->protocol == __constant_htons(ETH_P_PPP_DISC)) {
+      if (!memcmp(rcu_dereference(skb)->mac_header,
+                  rcu_dereference(skb)->dev->dev_addr,
+                  ETH_ALEN)) {
+         return skb;
+      }
+   }
+#endif
 
 	if (*pt_prev) {
 		*ret = deliver_skb(skb, *pt_prev, orig_dev);
@@ -2137,7 +2300,9 @@ static int ing_filter(struct sk_buff *skb)
 	if (q != &noop_qdisc) {
 		spin_lock(qdisc_lock(q));
 		if (likely(!test_bit(__QDISC_STATE_DEACTIVATED, &q->state)))
+		{
 			result = qdisc_enqueue_root(skb, q);
+		}
 		spin_unlock(qdisc_lock(q));
 	}
 
@@ -2199,6 +2364,11 @@ void netif_nit_deliver(struct sk_buff *skb)
 	rcu_read_unlock();
 }
 
+#if defined (CONFIG_MIPS_BRCM) && (defined(CONFIG_BCM_VLAN) || defined(CONFIG_BCM_VLAN_MODULE))
+int (*bcm_vlan_handle_frame_hook)(struct sk_buff **) = NULL;
+#endif
+
+
 /**
  *	netif_receive_skb - process receive buffer from network
  *	@skb: buffer to process
@@ -2221,25 +2391,38 @@ int netif_receive_skb(struct sk_buff *skb)
 	struct net_device *null_or_orig;
 	int ret = NET_RX_DROP;
 	__be16 type;
+	
 
 	if (skb->vlan_tci && vlan_hwaccel_do_receive(skb))
 		return NET_RX_SUCCESS;
 
 	/* if we've gotten here through NAPI, check netpoll */
 	if (netpoll_receive_skb(skb))
+    {
 		return NET_RX_DROP;
+    }
 
 	if (!skb->tstamp.tv64)
 		net_timestamp(skb);
 
 	if (!skb->iif)
 		skb->iif = skb->dev->ifindex;
+#if defined(CONFIG_MIPS_BRCM)
+	/*mark IFFWAN flag in skb based on dev->priv_flags */
+	if(skb->dev)
+	{
+		unsigned int mark = skb->mark;
+		skb->mark |= SKBMARK_SET_IFFWAN_MARK(mark, ((skb->dev->priv_flags & IFF_WANDEV) ? 1:0));
+	}
+#endif
 
 	null_or_orig = NULL;
 	orig_dev = skb->dev;
 	if (orig_dev->master) {
 		if (skb_bond_should_drop(skb))
+		{
 			null_or_orig = orig_dev; /* deliver only exact match */
+		}
 		else
 			skb->dev = orig_dev->master;
 	}
@@ -2253,6 +2436,11 @@ int netif_receive_skb(struct sk_buff *skb)
 	pt_prev = NULL;
 
 	rcu_read_lock();
+
+#if defined(CONFIG_MIPS_BRCM) && (defined(CONFIG_BCM_VLAN) || defined(CONFIG_BCM_VLAN_MODULE))
+        if(bcm_vlan_handle_frame_hook && (ret = bcm_vlan_handle_frame_hook(&skb)) != 0)
+            goto out;
+#endif
 
 #ifdef CONFIG_NET_CLS_ACT
 	if (skb->tc_verd & TC_NCLS) {
@@ -2277,6 +2465,15 @@ int netif_receive_skb(struct sk_buff *skb)
 ncls:
 #endif
 
+#if defined(CONFIG_MIPS_BRCM) && defined(CONFIG_BCM_P8021AG) || defined(CONFIG_BCM_P8021AG_MODULE)
+	if (((skb->protocol == __constant_htons(ETH_P_8021AG)) || 
+		 (skb->protocol == __constant_htons(ETH_P_8021Q) && *(unsigned short *) &skb->data[2] == ETH_P_8021AG))
+		 && p8021ag_hook && !p8021ag_hook(skb) )
+        goto out;
+		
+#endif
+
+
 	skb = handle_bridge(skb, &pt_prev, &ret, orig_dev);
 	if (!skb)
 		goto out;
@@ -2290,8 +2487,8 @@ ncls:
 	list_for_each_entry_rcu(ptype,
 			&ptype_base[ntohs(type) & PTYPE_HASH_MASK], list) {
 		if (ptype->type == type &&
-		    (ptype->dev == null_or_orig || ptype->dev == skb->dev ||
-		     ptype->dev == orig_dev)) {
+			 (ptype->dev == null_or_orig || ptype->dev == skb->dev ||
+			  ptype->dev == orig_dev)) {
 			if (pt_prev)
 				ret = deliver_skb(skb, pt_prev, orig_dev);
 			pt_prev = ptype;
@@ -2610,7 +2807,7 @@ int napi_frags_finish(struct napi_struct *napi, struct sk_buff *skb, int ret)
 	}
 
 	return err;
-}
+	}
 EXPORT_SYMBOL(napi_frags_finish);
 
 int napi_gro_frags(struct napi_struct *napi, struct napi_gro_fraginfo *info)
@@ -2764,6 +2961,7 @@ static void net_rx_action(struct softirq_action *h)
 
 		have = netpoll_poll_lock(n);
 
+
 		weight = n->weight;
 
 		/* This NAPI_STATE_SCHED test is for avoiding a race
@@ -2798,6 +2996,7 @@ static void net_rx_action(struct softirq_action *h)
 	}
 out:
 	local_irq_enable();
+
 
 #ifdef CONFIG_NET_DMA
 	/*
@@ -3861,6 +4060,7 @@ static int dev_ifsioc_locked(struct net *net, struct ifreq *ifr, unsigned int cm
 			ifr->ifr_metric = 0;
 			return 0;
 
+
 		case SIOCGIFMTU:	/* Get the MTU of a device */
 			ifr->ifr_mtu = dev->mtu;
 			return 0;
@@ -3894,6 +4094,15 @@ static int dev_ifsioc_locked(struct net *net, struct ifreq *ifr, unsigned int cm
 		case SIOCGIFTXQLEN:
 			ifr->ifr_qlen = dev->tx_queue_len;
 			return 0;
+
+#if defined(CONFIG_MIPS_BRCM)
+		case SIOCGPRIVIFFLAGS:	/* Get private interface flags */
+            if(netdev_path_is_leaf(dev))
+                ifr->ifr_flags = dev->priv_flags;
+            else
+                ifr->ifr_flags = 0;
+			return 0;
+#endif
 
 		default:
 			/* dev_ioctl() should ensure this case
@@ -3979,9 +4188,41 @@ static int dev_ifsioc(struct net *net, struct ifreq *ifr, unsigned int cmd)
 			ifr->ifr_newname[IFNAMSIZ-1] = '\0';
 			return dev_change_name(dev, ifr->ifr_newname);
 
+#if defined(CONFIG_MIPS_BRCM)
+		case SIOCGIFTRANSSTART:
+			ifr->ifr_ifru.ifru_ivalue = dev->trans_start;
+			return 0;
+
+		case SIOCCIFSTATS:	/* Clean up the Stats of a device */
+#ifdef CONFIG_BLOG
+			if ( dev->clr_stats )
+				dev->clr_stats( dev );
+			else
+#endif
+			{
+				// JU: Note: the following code assumes that the driver stats are writable
+				struct net_device_stats * pStats;
+				if (dev->netdev_ops == NULL || dev->netdev_ops->ndo_get_stats == NULL)
+				{
+					printk("[%s.%d]: dev->netdev_ops->ndo_get_stats is %p (%s)\n", __func__, __LINE__, dev->netdev_ops->ndo_get_stats, dev->name);
+					return 0;
+				}
+				else
+				{
+					pStats = dev->netdev_ops->ndo_get_stats(dev);
+				}
+				if (pStats)
+				    memset(pStats, 0, sizeof(struct net_device_stats));
+				else
+					printk("ERROR: [%s.%d]: could not reset stats for device %s\n", __func__, __LINE__, dev->name);
+			}
+
+			return 0;
+#endif
 		/*
 		 *	Unknown or private ioctl
 		 */
+
 
 		default:
 			if ((cmd >= SIOCDEVPRIVATE &&
@@ -4078,6 +4319,10 @@ int dev_ioctl(struct net *net, unsigned int cmd, void __user *arg)
 		case SIOCGIFMAP:
 		case SIOCGIFINDEX:
 		case SIOCGIFTXQLEN:
+#if defined(CONFIG_MIPS_BRCM)
+		case SIOCGIFTRANSSTART:
+        case SIOCGPRIVIFFLAGS:
+#endif
 			dev_load(net, ifr.ifr_name);
 			read_lock(&dev_base_lock);
 			ret = dev_ifsioc_locked(net, &ifr, cmd);
@@ -4178,6 +4423,9 @@ int dev_ioctl(struct net *net, unsigned int cmd, void __user *arg)
 		 */
 		default:
 			if (cmd == SIOCWANDEV ||
+#if defined(CONFIG_MIPS_BRCM)
+                            cmd == SIOCCIFSTATS ||
+#endif                
 			    (cmd >= SIOCDEVPRIVATE &&
 			     cmd <= SIOCDEVPRIVATE + 15)) {
 				dev_load(net, ifr.ifr_name);
@@ -4209,6 +4457,10 @@ static int dev_new_index(struct net *net)
 {
 	static int ifindex;
 	for (;;) {
+#if defined(CONFIG_MIPS_BRCM)
+        if (ifindex >= (MAXVIFS - 1))
+            ifindex = 0;
+#endif
 		if (++ifindex <= 0)
 			ifindex = 1;
 		if (!__dev_get_by_index(net, ifindex))
@@ -4313,7 +4565,11 @@ unsigned long netdev_fix_features(unsigned long features, const char *name)
 	}
 
 	if (features & NETIF_F_UFO) {
+#if defined(CONFIG_MIPS_BRCM)
+		if (!(features & NETIF_F_GEN_CSUM) && !(features & NETIF_F_IP_CSUM)) {
+#else
 		if (!(features & NETIF_F_GEN_CSUM)) {
+#endif
 			if (name)
 				printk(KERN_ERR "%s: Dropping NETIF_F_UFO "
 				       "since no NETIF_F_HW_CSUM feature.\n",
@@ -4749,6 +5005,9 @@ struct net_device *alloc_netdev_mq(int sizeof_priv, const char *name,
 	struct net_device *dev;
 	size_t alloc_size;
 	void *p;
+#if defined(CONFIG_MIPS_BRCM)
+	static int offset = 0;
+#endif
 
 	BUG_ON(strlen(name) >= sizeof(dev->name));
 
@@ -4758,10 +5017,19 @@ struct net_device *alloc_netdev_mq(int sizeof_priv, const char *name,
 		alloc_size = (alloc_size + NETDEV_ALIGN_CONST) & ~NETDEV_ALIGN_CONST;
 		alloc_size += sizeof_priv;
 	}
+
 	/* ensure 32-byte alignment of whole construct */
 	alloc_size += NETDEV_ALIGN_CONST;
+   
+#if defined(CONFIG_MIPS_BRCM)
+	/* Add an offset to break possible alignment of dev structs in cache */
+	/* Note that "offset" is a static variable so it will retain its value */
+	/* on each call of this function */
+	alloc_size += offset;
+#endif
 
 	p = kzalloc(alloc_size, GFP_KERNEL);
+
 	if (!p) {
 		printk(KERN_ERR "alloc_netdev: Unable to allocate device.\n");
 		return NULL;
@@ -4775,8 +5043,22 @@ struct net_device *alloc_netdev_mq(int sizeof_priv, const char *name,
 		return NULL;
 	}
 
+#if defined(CONFIG_MIPS_BRCM)
+	/* to break alignment of dev structures increment dev pointer 
+		by the offset */
+	dev = (struct net_device *)
+			((((long)p + NETDEV_ALIGN_CONST) & ~NETDEV_ALIGN_CONST) + offset);
+
+	/* Increment offset in preparation for the next call to this function */
+	/* but don't allow it to increment excessively to avoid wasting memory */
+	offset += NETDEV_ALIGN;
+	if (offset >= 512) {
+		offset -= 512;
+	}
+#else
 	dev = (struct net_device *)
 		(((long)p + NETDEV_ALIGN_CONST) & ~NETDEV_ALIGN_CONST);
+#endif
 	dev->padded = (char *)dev - (char *)p;
 	dev_net_set(dev, &init_net);
 
@@ -4791,6 +5073,7 @@ struct net_device *alloc_netdev_mq(int sizeof_priv, const char *name,
 	INIT_LIST_HEAD(&dev->napi_list);
 	setup(dev);
 	strcpy(dev->name, name);
+
 	return dev;
 }
 EXPORT_SYMBOL(alloc_netdev_mq);
@@ -5331,6 +5614,12 @@ EXPORT_SYMBOL(br_fdb_get_hook);
 EXPORT_SYMBOL(br_fdb_put_hook);
 #endif
 
+#if defined(CONFIG_MIPS_BRCM) && (defined(CONFIG_BCM_VLAN) || defined(CONFIG_BCM_VLAN_MODULE))
+EXPORT_SYMBOL(bcm_vlan_handle_frame_hook);
+#endif
+
+#ifdef CONFIG_KMOD
 EXPORT_SYMBOL(dev_load);
+#endif
 
 EXPORT_PER_CPU_SYMBOL(softnet_data);

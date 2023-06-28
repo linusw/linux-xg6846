@@ -203,8 +203,13 @@ static int ramfs_parse_options(char *data, struct ramfs_mount_opts *opts)
 			opts->mode = option & S_IALLUGO;
 			break;
 		default:
+#if defined(CONFIG_MIPS_BRCM)
+			opts->mode = RAMFS_DEFAULT_MODE;
+			break;
+#else
 			printk(KERN_ERR "ramfs: bad mount option: %s\n", p);
 			return -EINVAL;
+#endif			
 		}
 	}
 

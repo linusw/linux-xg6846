@@ -12,6 +12,9 @@
 #define MARK_OR_VALUE  (0xffffffe0)
 #define MARK_AND_VALUE (0xffffffd0)
 #define MARK_XOR_VALUE (0xffffffc0)
+// CONFIG_MIPS_BRCM Begin Broadcom changed code for VLAN auto-tagging
+#define VTAG_SET_VALUE (0xffffffb0)
+// CONFIG_MIPS_BRCM End Broadcom changed code for VLAN auto-tagging
 
 struct ebt_mark_t_info
 {

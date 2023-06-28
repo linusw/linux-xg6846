@@ -23,6 +23,7 @@
 #include <asm/system.h>
 #include <asm/watch.h>
 
+
 /*
  * Not all of the MIPS CPUs have the "wait" instruction available. Moreover,
  * the implementation of the "wait" feature differs between CPU families. This
@@ -45,6 +46,64 @@ static void r39xx_wait(void)
 		write_c0_conf(read_c0_conf() | TX39_CONF_HALT);
 	local_irq_enable();
 }
+
+#if defined(CONFIG_BCM_HOSTMIPS_PWRSAVE)
+extern void BcmPwrMngtSetASCR(unsigned int freq_div);
+#endif
+
+
+#if defined(CONFIG_MIPS_BRCM)
+
+#if defined(CONFIG_BCM_HOSTMIPS_PWRSAVE) || defined(CONFIG_BCM_DDR_SELF_REFRESH_PWRSAVE)
+extern unsigned int self_refresh_enabled;
+extern void BcmPwrMngtReduceCpuSpeed (void);
+extern void BcmPwrMngtResumeFullSpeed (void);
+#endif
+
+/* Brcm version minimizes the chance of an irq sneaking in between checking
+need_resched and wait instruction, or eliminates it completely (depending on 
+pipeline design). This avoids delayed processing of softirq. (The delayed 
+softirq problem can happen when preemption is disabled and softirq runs in 
+process context.) */
+
+static void brcm_wait(void)
+{
+#if defined(CONFIG_BCM_HOSTMIPS_PWRSAVE) || defined(CONFIG_BCM_DDR_SELF_REFRESH_PWRSAVE)
+	BcmPwrMngtReduceCpuSpeed();
+#endif
+
+	/* Always try to treat the segment below as an atomic entity and try not 
+	to insert code or move code around */
+	/* Begin fixed safe code pattern for the particular MIPS pipleline*/
+	raw_local_irq_disable();
+	if (!need_resched() &&  !(read_c0_cause() & read_c0_status())) {
+		/* Perform SYNC, enable interrupts, then WAIT */
+		__asm__ __volatile__ (
+			".set push\n"
+			".set noreorder\n"
+			".set noat\n"
+			"sync\n"
+			"mfc0	$1, $12\n"
+			"ori $1, $1, 0x1f\n"
+			"xori	$1, $1, 0x1e\n"
+			"mtc0	$1, $12\n"
+			"nop\n"  // Recommended by MIPS team
+			"wait\n"
+			"nop\n"  // Needed to ensure next instruction is safe
+			"nop\n"  // When speed is reduced to 1/8, need one more to get DG interrupt
+			"nop\n"  // Safety net...
+			".set pop\n");
+	}
+	else {
+#if defined(CONFIG_BCM_HOSTMIPS_PWRSAVE) || defined(CONFIG_BCM_DDR_SELF_REFRESH_PWRSAVE)
+		BcmPwrMngtResumeFullSpeed();
+#endif
+		raw_local_irq_enable();
+	}
+	/* End fixed code pattern */
+}
+
+#endif
 
 extern void r4k_wait(void);
 
@@ -208,10 +267,43 @@ void __init check_wait(void)
 		if ((c->processor_id & 0x00ff) >= 0x40)
 			cpu_wait = r4k_wait;
 		break;
+#if defined(CONFIG_MIPS_BRCM)
+	case CPU_BMIPS4350:
+		cpu_wait = brcm_wait;
+		printk("wait instruction: enabled\n");
+		break;
+ #endif
 	default:
 		break;
 	}
 }
+
+/* for power management */
+#if defined (CONFIG_MIPS_BRCM)
+static void set_cpu_r4k_wait(int enable)
+{
+	if(enable) {
+		cpu_wait = brcm_wait;
+		printk("wait instruction: enabled\n");
+    }
+	else {
+		cpu_wait = NULL;
+		printk("wait instruction: disabled\n");
+    }
+}
+
+static int get_cpu_r4k_wait(void)
+{
+	if(cpu_wait == brcm_wait)
+		return 1;
+	else
+		return 0;
+}
+
+#include <linux/module.h> // just for EXPORT_SYMBOL
+EXPORT_SYMBOL(set_cpu_r4k_wait);
+EXPORT_SYMBOL(get_cpu_r4k_wait);
+#endif 
 
 static inline void check_errata(void)
 {
@@ -863,6 +955,12 @@ static inline void cpu_probe_broadcom(struct cpuinfo_mips *c, unsigned int cpu)
 		c->cputype = CPU_BCM4710;
 		__cpu_name[cpu] = "Broadcom BCM4710";
 		break;
+#if defined(CONFIG_MIPS_BRCM)
+	case PRID_IMP_BMIPS4350:
+		c->cputype = CPU_BMIPS4350;
+		__cpu_name[cpu] = "Broadcom4350";
+		break;
+#endif
 	}
 }
 
@@ -926,6 +1024,7 @@ __cpuinit void cpu_probe(void)
 		break;
 	}
 
+#if 0
 	BUG_ON(!__cpu_name[cpu]);
 	BUG_ON(c->cputype == CPU_UNKNOWN);
 
@@ -935,6 +1034,7 @@ __cpuinit void cpu_probe(void)
 	 * manually setup otherwise it could trigger some nasty bugs.
 	 */
 	BUG_ON(current_cpu_type() != c->cputype);
+#endif
 
 	if (c->options & MIPS_CPU_FPU) {
 		c->fpu_id = cpu_get_fpu_id();

@@ -34,6 +34,13 @@
 DEFINE_SPINLOCK(rtc_lock);
 EXPORT_SYMBOL(rtc_lock);
 
+/* how many counter cycles in a jiffy */
+#if defined(CONFIG_MIPS_BRCM)
+unsigned long cycles_per_jiffy __read_mostly;
+#else
+static unsigned long cycles_per_jiffy __read_mostly;
+#endif
+
 int __weak rtc_mips_set_time(unsigned long sec)
 {
 	return 0;

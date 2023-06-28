@@ -1574,6 +1574,7 @@ static long do_wait(enum pid_type type, struct pid *pid, int options,
 
 	trace_sched_process_wait(pid);
 
+
 	add_wait_queue(&current->signal->wait_chldexit,&wait);
 repeat:
 	/*

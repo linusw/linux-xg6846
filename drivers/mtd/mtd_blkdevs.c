@@ -89,6 +89,16 @@ static int mtd_blktrans_thread(void *arg)
 	struct mtd_blktrans_ops *tr = arg;
 	struct request_queue *rq = tr->blkcore_priv->rq;
 
+#if defined(CONFIG_MIPS_BRCM)
+#if defined (CONFIG_PREEMPT_SOFTIRQS)
+	/* mtdblockd needs to run at the same priority as ksoftirqd threads so loading of applications from flash won't get blocked by network traffic.
+	One bad thing about blocking application loading is that voice applications can be blocked by network traffic, despite that they have higher
+	priority than network tasks. This would be a priority inversion scenario if happens. */
+	struct sched_param param = { .sched_priority = CONFIG_BRCM_SOFTIRQ_BASE_RT_PRIO };
+	sched_setscheduler(current, SCHED_RR, &param);
+#endif
+#endif
+
 	/* we might get involved when memory gets low, so use PF_MEMALLOC */
 	current->flags |= PF_MEMALLOC;
 

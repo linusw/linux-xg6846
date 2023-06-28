@@ -69,6 +69,100 @@
 
 #include "kmap_skb.h"
 
+#if defined(CONFIG_MIPS_BRCM)
+#include <linux/nbuff.h>
+#include <linux/blog.h>
+
+/* Returns size of struct sk_buff */
+size_t skb_size(void)
+{
+    return sizeof(struct sk_buff);
+}
+EXPORT_SYMBOL(skb_size);
+
+size_t skb_aligned_size(void)
+{
+    return ((sizeof(struct sk_buff) + 0x0f) & ~0x0f);
+}
+EXPORT_SYMBOL(skb_aligned_size);
+
+int skb_layout_test(int head_offset, int tail_offset, int end_offset)
+{
+#undef SKBOFFSETOF
+#define SKBOFFSETOF(member)    ((int)&((struct sk_buff*)0)->member)
+    if ( (SKBOFFSETOF(head) == head_offset) &&
+         (SKBOFFSETOF(tail) == tail_offset) &&
+         (SKBOFFSETOF(end)  == end_offset) )
+        return 1;
+    return 0;
+}
+EXPORT_SYMBOL(skb_layout_test);
+
+unsigned int skb_avail_headroom(const struct sk_buff *skb)
+{
+    return skb->data - skb->head;
+}
+EXPORT_SYMBOL(skb_avail_headroom);
+
+/**
+ *  
+ *	skb_headerinit  -   initialize a socket buffer header
+ *	@headroom: reserved headroom size
+ *	@datalen: data buffer size, data buffer is allocated by caller
+ *	@skb: skb allocated by caller
+ *	@data: data buffer allocated by caller
+ *	@recycle_hook: callback function to free data buffer and skb
+ *	@recycle_context: context value passed to recycle_hook, param1
+ *	@blog_p: pass a blog to a skb for logging
+ *
+ *	Initializes the socket buffer and assigns the data buffer to it.
+ *	Both the sk_buff and the pointed data buffer are pre-allocated.
+ *
+ */
+void skb_headerinit(unsigned int headroom, unsigned int datalen,
+					struct sk_buff *skb, unsigned char *data,
+					RecycleFuncP recycle_hook, unsigned int recycle_context,
+					struct blog_t * blog_p)		/* defined(CONFIG_BLOG) */
+{
+	memset(skb, 0, offsetof(struct sk_buff, truesize));
+
+	skb->truesize = datalen + sizeof(struct sk_buff);
+	atomic_set(&skb->users, 1);
+	skb->head = data - headroom;
+	skb->data = data;
+	skb->tail = data + datalen;
+	skb->end  = (unsigned char *) (((unsigned)data + datalen + 0x0f) & ~0x0f);
+	skb->len = datalen;
+
+#if defined(CONFIG_BLOG)
+	skb->blog_p = blog_p;
+	if ( blog_p ) blog_p->skb_p = skb;
+#endif
+#if defined(CONFIG_MIPS_BRCM) && (defined(CONFIG_BCM_VLAN) || defined(CONFIG_BCM_VLAN_MODULE))
+	skb->vlan_count = 0;
+#endif
+	skb->recycle_hook = recycle_hook;
+	skb->recycle_context = recycle_context;
+	skb->recycle_flags = SKB_RECYCLE | SKB_DATA_RECYCLE;
+
+	atomic_set(&(skb_shinfo(skb)->dataref), 1);
+	skb_shinfo(skb)->nr_frags = 0;
+	skb_shinfo(skb)->gso_size = 0;
+	skb_shinfo(skb)->gso_segs = 0;
+	skb_shinfo(skb)->gso_type = 0;
+	skb_shinfo(skb)->ip6_frag_id = 0;
+	skb_shinfo(skb)->tx_flags.flags = 0;
+	skb_shinfo(skb)->frag_list = NULL;
+	memset(&(skb_shinfo(skb)->hwtstamps), 0,
+	                                    sizeof(skb_shinfo(skb)->hwtstamps));
+	skb_shinfo(skb)->dirty_p=NULL;
+}
+EXPORT_SYMBOL(skb_headerinit);
+
+#endif  /* CONFIG_MIPS_BRCM */
+#include <linux/version.h>
+
+
 static struct kmem_cache *skbuff_head_cache __read_mostly;
 static struct kmem_cache *skbuff_fclone_cache __read_mostly;
 
@@ -192,9 +286,9 @@ struct sk_buff *__alloc_skb(unsigned int size, gfp_t gfp_mask,
 	/*
 	 * Only clear those fields we need to clear, not those that we will
 	 * actually initialise below. Hence, don't put any more fields after
-	 * the tail pointer in struct sk_buff!
+   * the truesize pointer in struct sk_buff!
 	 */
-	memset(skb, 0, offsetof(struct sk_buff, tail));
+	memset(skb, 0, offsetof(struct sk_buff, truesize));
 	skb->truesize = size + sizeof(struct sk_buff);
 	atomic_set(&skb->users, 1);
 	skb->head = data;
@@ -212,6 +306,9 @@ struct sk_buff *__alloc_skb(unsigned int size, gfp_t gfp_mask,
 	shinfo->tx_flags.flags = 0;
 	shinfo->frag_list = NULL;
 	memset(&shinfo->hwtstamps, 0, sizeof(shinfo->hwtstamps));
+#ifdef CONFIG_MIPS_BRCM
+	shinfo->dirty_p = NULL;
+#endif
 
 	if (fclone) {
 		struct sk_buff *child = skb + 1;
@@ -340,7 +437,18 @@ static void skb_release_data(struct sk_buff *skb)
 
 		if (skb_shinfo(skb)->frag_list)
 			skb_drop_fraglist(skb);
-
+		
+#if defined(CONFIG_MIPS_BRCM)
+		/*
+		 * If the data buffer came from a preallocated pool, recycle it.
+		 * Recycling may only be performed when no references exist to it.
+	 	 */
+		if (skb->recycle_hook && (skb->recycle_flags & SKB_DATA_RECYCLE)) {
+			(*skb->recycle_hook)(skb, skb->recycle_context, SKB_DATA_RECYCLE);
+			skb->recycle_flags &= SKB_DATA_NO_RECYCLE;	/* mask out */
+		}
+		else
+#endif
 		kfree(skb->head);
 	}
 }
@@ -353,10 +461,22 @@ static void kfree_skbmem(struct sk_buff *skb)
 	struct sk_buff *other;
 	atomic_t *fclone_ref;
 
-	switch (skb->fclone) {
-	case SKB_FCLONE_UNAVAILABLE:
-		kmem_cache_free(skbuff_head_cache, skb);
-		break;
+#if defined(CONFIG_MIPS_BRCM)
+#if defined(CONFIG_BLOG)
+	blog_free(skb);		/* CONFIG_BLOG: Frees associated blog object */
+#endif
+
+	/* If the skb came from a preallocated pool, pass it to recycler hook */
+	if (skb->recycle_hook && (skb->recycle_flags & SKB_RECYCLE)) {
+		(*skb->recycle_hook)(skb, skb->recycle_context, SKB_RECYCLE);
+		// Race condition - the ownership of the sk_buff has already transferred, some driver could be using it. Commenting out the line below.
+		// skb->recycle_flags &= SKB_NO_RECYCLE;	/* mask out. (redundant) */ 
+	} else {
+#endif //defined(CONFIG_MIPS_BRCM)
+		switch (skb->fclone) {
+		case SKB_FCLONE_UNAVAILABLE:
+			kmem_cache_free(skbuff_head_cache, skb);
+			break;
 
 	case SKB_FCLONE_ORIG:
 		fclone_ref = (atomic_t *) (skb + 2);
@@ -376,7 +496,10 @@ static void kfree_skbmem(struct sk_buff *skb)
 		if (atomic_dec_and_test(fclone_ref))
 			kmem_cache_free(skbuff_fclone_cache, other);
 		break;
+		}
+#if defined(CONFIG_MIPS_BRCM)
 	}
+#endif	
 }
 
 static void skb_release_head_state(struct sk_buff *skb)
@@ -397,12 +520,16 @@ static void skb_release_head_state(struct sk_buff *skb)
 	nf_bridge_put(skb->nf_bridge);
 #endif
 /* XXX: IS this still necessary? - JHS */
+#if defined(CONFIG_MIPS_BRCM)
+	skb->tc_word = 0;
+#else
 #ifdef CONFIG_NET_SCHED
 	skb->tc_index = 0;
 #ifdef CONFIG_NET_CLS_ACT
 	skb->tc_verd = 0;
 #endif
 #endif
+#endif	/* else !defined(CONFIG_MIPS_BRCM) */
 }
 
 /* Free everything but the sk_buff shell. */
@@ -447,6 +574,292 @@ void kfree_skb(struct sk_buff *skb)
 	__kfree_skb(skb);
 }
 EXPORT_SYMBOL(kfree_skb);
+
+#if defined(CONFIG_MIPS_BRCM)
+/*
+ * Translate a fkb to a skb, by allocating a skb from the skbuff_head_cache.
+ * PS. skb->dev is not set during initialization.
+ *
+ * Caller verifies whether the fkb is unshared:
+ *  if fkb_p==NULL||IS_FKB_CLONE(fkb_p)||fkb_p->users>1 and return NULL skb.
+ *
+ * skb_xlate is deprecated.  New code should call skb_xlate_dp directly.
+ */
+struct sk_buff * skb_xlate(struct fkbuff * fkb_p)
+{
+	return (skb_xlate_dp(fkb_p, NULL));
+}
+
+struct sk_buff * skb_xlate_dp(struct fkbuff * fkb_p, uint8_t *dirty_p)
+{
+	struct sk_buff * skb_p;
+	unsigned int datalen;
+
+	/* Optimization: use preallocated pool of skb with SKB_POOL_RECYCLE flag */
+	skb_p = kmem_cache_alloc(skbuff_head_cache, GFP_ATOMIC);
+	if ( !skb_p )
+		return skb_p;
+	skb_p->fclone = SKB_FCLONE_UNAVAILABLE;
+
+	memset(skb_p, 0, offsetof(struct sk_buff, truesize));
+
+	datalen = SKB_DATA_ALIGN(fkb_p->len + FKB_XLATE_SKB_TAILROOM);
+
+	skb_p->data = fkb_p->data;
+	skb_p->head = (unsigned char *)(fkb_p + 1 );
+	skb_p->tail = fkb_p->data + fkb_p->len;
+	skb_p->end  = (unsigned char *)		/* align to skb cacheline */
+                  (((unsigned)skb_p->data + datalen + 0x0f) & ~0x0f);
+
+#define F2S(x) skb_p->x = fkb_p->x
+	F2S(len);
+	F2S(mark);
+	F2S(priority);
+
+#if defined(CONFIG_BLOG)
+    if ( _IS_BPTR_(fkb_p->blog_p) ) /* should not happen */
+    {
+        F2S(blog_p);
+        fkb_p->blog_p->skb_p = skb_p;
+    }
+#endif
+	F2S(recycle_hook);
+	F2S(recycle_context);
+	skb_p->recycle_flags = SKB_DATA_RECYCLE;
+
+	fkb_dec_ref(fkb_p);	/* redundant: fkb_p must not be used henceforth */
+
+	atomic_set(&skb_p->users, 1);
+	skb_p->truesize = datalen + sizeof(struct sk_buff);
+
+	/* any change to skb_shinfo initialization in __alloc_skb must be ported
+	 * to this block. */
+	atomic_set(&(skb_shinfo(skb_p)->dataref), 1);
+	skb_shinfo(skb_p)->nr_frags = 0;
+	skb_shinfo(skb_p)->gso_size = 0;
+	skb_shinfo(skb_p)->gso_segs = 0;
+	skb_shinfo(skb_p)->gso_type = 0;
+	skb_shinfo(skb_p)->ip6_frag_id = 0;
+	skb_shinfo(skb_p)->tx_flags.flags = 0;
+	skb_shinfo(skb_p)->frag_list = NULL;
+	memset(&(skb_shinfo(skb_p)->hwtstamps), 0,
+	                                 sizeof(skb_shinfo(skb_p)->hwtstamps));
+
+	/*
+	 * When fkb is xlated to skb, preserve the dirty_p info.
+	 * This allows receiving driver to shorten its cache flush and also
+	 * can shorten the cache flush when the buffer is recycled.  Improves
+	 * wlan perf by 10%.
+	 */
+	skb_shinfo(skb_p)->dirty_p = dirty_p;
+
+	return skb_p;
+}
+
+EXPORT_SYMBOL(skb_xlate);
+
+/*
+ *This fucntion fragments the skb into multiple skbs and xmits them
+ *this fucntion is a substitue for ip_fragment when Ip stack is skipped
+ *for packet acceleartion(fcache,CMF)
+ *
+ *Currently only IPv4 is supported
+ *
+ */
+
+void skb_frag_xmit(struct sk_buff *origskb, struct net_device *txdev,
+                     uint32_t is_pppoe, uint32_t minMtu,  void *ipp)
+{
+
+#if 0
+#define DEBUG_SKBFRAG(args) printk args
+#else
+#define DEBUG_SKBFRAG(args) 
+#endif
+
+#define IP_DF		0x4000		/* Flag: "Don't Fragment"	*/
+#define IP_MF		0x2000		/* Flag: "More Fragments"	*/
+#define IP_OFFSET	0x1FFF		/* "Fragment Offset" part	*/
+
+	struct iphdr *iph;
+	int datapos, offset;
+	unsigned int max_dlen, hlen, hdrslen, left, len;
+	uint16_t not_last_frag;
+	struct sk_buff *fraglisthead;
+	struct sk_buff *fraglisttail;
+	struct sk_buff *skb2;
+
+	DEBUG_SKBFRAG(("skb_frag_xmit:enter origskb=%p,netdev=%p,is_pppoe=%d,\
+				minMtu=%d ipp=%p\n",origskb, txdev, is_pppoe, minMtu, ipp));
+
+	if(likely(origskb->len <= minMtu))
+	{
+		/* xmit packet */
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(2,6,30)
+		txdev->netdev_ops->ndo_start_xmit(
+#else
+		txdev->hard_start_xmit(
+#endif
+				(void*)CAST_REAL_TO_VIRT_PNBUFF(origskb,SKBUFF_PTR),
+				txdev);
+		return ;
+	}
+
+	fraglisthead = NULL;
+	fraglisttail = NULL;
+	skb2 = NULL;
+
+	DEBUG_SKBFRAG(("skb_frag_xmit: checking for DF\n"));
+	iph = (struct iphdr *)ipp;
+	/* DROP the packet if DF flag is set */
+	if (unlikely((iph->frag_off & htons(IP_DF)) && !(origskb->local_df))) {
+		/*----TODO: update error stats, send icmp error message ?--- */
+		kfree_skb(origskb);
+		return ;
+	}
+
+	hlen = iph->ihl * 4;
+
+	DEBUG_SKBFRAG(("skb_frag_xmit: calculating hdrs len \n"));
+	/* calculate space for data,(ip payload) */
+	hdrslen = ((int)ipp - (int)(origskb->data)) + hlen; 
+
+	left = origskb->len - hdrslen;	/* Size of ip payload */
+	datapos = hdrslen;/* Where to start from */
+	max_dlen =  minMtu - hdrslen;	/* ip payload per frame */
+
+	DEBUG_SKBFRAG(("skb_frag_xmit: computed hdrslen=%d, left=%d\n",hdrslen, left));
+
+	/* frag_offset is represented in 8 byte blocks */
+	offset = (ntohs(iph->frag_off) & IP_OFFSET) << 3;
+	not_last_frag = iph->frag_off & htons(IP_MF);
+
+	/* copy the excess data (>MTU size) from orig fkb to new fkb's */
+	fraglisthead = origskb;
+
+	while(left > 0){
+		DEBUG_SKBFRAG(("skb_frag_xmit: making fragments\n"));
+		len = left;
+		/* IF: it doesn't fit, use 'max_dlen' - the data space left */
+		if (len > max_dlen)
+			len = max_dlen;
+		/* IF: we are not sending upto and including the packet end
+			then align the next start on an eight byte boundary */
+		if (len < left)	{
+			len &= ~7;
+		}
+
+		if(datapos == hdrslen){
+			/*reuse the orig skb for 1st fragment */
+			skb2 = origskb;
+			DEBUG_SKBFRAG(("skb_frag_xmit: reusing skb\n"));
+			skb2->next = NULL;
+			fraglisttail = skb2;
+			skb2->len = hdrslen+len;
+			skb2->tail = skb2->data + (hdrslen+len);
+		}else {
+
+			DEBUG_SKBFRAG(("skb_frag_xmit: genrating new skb\n"));
+			/* Allocate a new skb */
+			if ((skb2 = alloc_skb(len+hdrslen, GFP_ATOMIC)) == NULL) {
+				printk(KERN_INFO "no memory for new fragment!\n");
+				goto fail;
+			}
+
+			/* copy skb metadata */       
+			skb2->mark = origskb->mark;
+			skb2->priority = origskb->priority;
+			skb2->dev = origskb->dev;
+
+			dst_release(skb2->dst);
+			skb2->dst = dst_clone(origskb->dst);
+#ifdef CONFIG_NET_SCHED
+			skb2->tc_index = origskb->tc_index;
+#endif
+
+			skb_put(skb2, len + hdrslen);
+
+			DEBUG_SKBFRAG(("skb_frag_xmit: copying headerto new skb\n"));
+
+			/* copy the l2 header &l3 header to new fkb from orig fkb */
+			memcpy(skb2->data, origskb->data, hdrslen);
+
+			DEBUG_SKBFRAG(("skb_frag_xmit: copying data to new skb\n"));
+			/*
+			 *	Copy a block of the IP datagram.
+			 */
+			memcpy(skb2->data+hdrslen, origskb->data+datapos, len);
+
+			skb2->next = NULL;
+			fraglisttail->next = skb2;
+			fraglisttail = skb2;
+		}
+		/*
+		 *	Fill in the new header fields.
+		 */
+		DEBUG_SKBFRAG(("skb_frag_xmit: adjusting ipheader\n"));
+		iph = (struct iphdr *)(skb2->data + (hdrslen- hlen));
+		iph->frag_off = htons((offset >> 3));
+		iph->tot_len = htons(len + hlen);
+
+		left -= len;
+		datapos += len;
+		offset += len;
+
+		/*fix pppoelen */ 
+		if (is_pppoe)
+			*((uint16_t*)iph - 2) = iph->tot_len + sizeof(uint16_t);
+
+		/*
+		 *	If we are fragmenting a fragment that's not the
+		 *	 last fragment then keep MF on each fragment 
+		 */
+		if (left > 0 || not_last_frag)
+			iph->frag_off |= htons(IP_MF);
+		//else
+		//iph->frag_off &= ~htons(IP_MF);/*make sure MF is cleared */
+
+
+		DEBUG_SKBFRAG(("skb_frag_xmit: computing ipcsum\n"));
+		/* fix ip checksum */
+		iph->check = 0;
+		/*TODO replace with our own csum_calc */
+		iph->check = ip_fast_csum((unsigned char *)iph, iph->ihl);
+
+
+		DEBUG_SKBFRAG(("skb_frag_xmit: loop done\n"));
+	}
+
+	/* xmit skb's */
+	while(fraglisthead){
+		DEBUG_SKBFRAG(("skb_frag_xmit: sending skb fragment \n"));
+		skb2 = fraglisthead;
+		fraglisthead = fraglisthead->next;
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(2,6,30)
+		txdev->netdev_ops->ndo_start_xmit(
+#else
+		txdev->hard_start_xmit(
+#endif
+				(void*)CAST_REAL_TO_VIRT_PNBUFF(skb2,SKBUFF_PTR),
+				txdev);
+	}
+	return ;
+
+fail:
+	DEBUG_SKBFRAG(("skb_frag_xmit: ENTERED FAIL CASE\n"));
+	while(fraglisthead){
+		skb2 = fraglisthead;
+		fraglisthead = fraglisthead->next;
+		kfree_skb(skb2);
+	}
+	return ;
+
+}
+EXPORT_SYMBOL(skb_frag_xmit);
+
+#endif  /* defined(CONFIG_MIPS_BRCM) */
+
+
 
 /**
  *	consume_skb - free an skbuff
@@ -506,7 +919,7 @@ int skb_recycle_check(struct sk_buff *skb, int skb_size)
 	shinfo->frag_list = NULL;
 	memset(&shinfo->hwtstamps, 0, sizeof(shinfo->hwtstamps));
 
-	memset(skb, 0, offsetof(struct sk_buff, tail));
+	memset(skb, 0, offsetof(struct sk_buff, truesize));
 	skb->data = skb->head + NET_SKB_PAD;
 	skb_reset_tail_pointer(skb);
 
@@ -516,6 +929,10 @@ EXPORT_SYMBOL(skb_recycle_check);
 
 static void __copy_skb_header(struct sk_buff *new, const struct sk_buff *old)
 {
+#if defined(CONFIG_BCM_VLAN) || defined(CONFIG_BCM_VLAN_MODULE)
+	int i;
+#endif
+
 	new->tstamp		= old->tstamp;
 	new->dev		= old->dev;
 	new->transport_header	= old->transport_header;
@@ -543,12 +960,28 @@ static void __copy_skb_header(struct sk_buff *new, const struct sk_buff *old)
     defined(CONFIG_NETFILTER_XT_TARGET_TRACE_MODULE)
 	new->nf_trace		= old->nf_trace;
 #endif
+#if defined(CONFIG_MIPS_BRCM)
+#if defined CONFIG_BLOG
+	blog_xfer(new, old);	/* CONFIG_BLOG: transfers blog ownership */
+#endif
+	new->vtag_word = old->vtag_word;
+	new->tc_word = old->tc_word;
+#if defined(CONFIG_BCM_VLAN) || defined(CONFIG_BCM_VLAN_MODULE)
+    new->vlan_count = old->vlan_count;
+    new->vlan_tpid = old->vlan_tpid;
+    for (i=0; i<SKB_VLAN_MAX_TAGS; i++) {
+        new->vlan_header[i] = old->vlan_header[i];
+    }
+    new->rxdev = old->rxdev;
+#endif
+#else
 #ifdef CONFIG_NET_SCHED
 	new->tc_index		= old->tc_index;
 #ifdef CONFIG_NET_CLS_ACT
 	new->tc_verd		= old->tc_verd;
 #endif
-#endif
+#endif //CONFIG_NET_CLS_ACT
+#endif //CONFIG_MIPS_BRCM
 	new->vlan_tci		= old->vlan_tci;
 
 	skb_copy_secmark(new, old);
@@ -556,6 +989,10 @@ static void __copy_skb_header(struct sk_buff *new, const struct sk_buff *old)
 
 static struct sk_buff *__skb_clone(struct sk_buff *n, struct sk_buff *skb)
 {
+#if defined(CONFIG_BCM_VLAN) || defined(CONFIG_BCM_VLAN_MODULE)
+	int i;
+#endif
+
 #define C(x) n->x = skb->x
 
 	n->next = n->prev = NULL;
@@ -575,6 +1012,23 @@ static struct sk_buff *__skb_clone(struct sk_buff *n, struct sk_buff *skb)
 	C(head);
 	C(data);
 	C(truesize);
+
+#if defined(CONFIG_MIPS_BRCM)
+	C(recycle_hook);
+	C(recycle_context);
+	n->recycle_flags = skb->recycle_flags & SKB_NO_RECYCLE;
+#endif
+
+#if defined(CONFIG_BCM_VLAN) || defined(CONFIG_BCM_VLAN_MODULE)
+    n->vlan_count = skb->vlan_count;
+    n->vlan_tpid = skb->vlan_tpid;
+    for (i=0; i<SKB_VLAN_MAX_TAGS; i++) {
+        n->vlan_header[i] = skb->vlan_header[i];
+    }
+    n->rxdev = skb->rxdev;
+#endif
+
+
 #if defined(CONFIG_MAC80211) || defined(CONFIG_MAC80211_MODULE)
 	C(do_not_encrypt);
 	C(requeue);
@@ -600,8 +1054,18 @@ static struct sk_buff *__skb_clone(struct sk_buff *n, struct sk_buff *skb)
  */
 struct sk_buff *skb_morph(struct sk_buff *dst, struct sk_buff *src)
 {
+	struct sk_buff *skb;
+	__u32	recycle_flags; 
+
 	skb_release_all(dst);
-	return __skb_clone(dst, src);
+
+	/* Need to retain the recycle flags of dst to free it into 
+	 * proper pool(skb and dst are same in current code).    
+	 */
+	recycle_flags = dst->recycle_flags & SKB_RECYCLE;
+	skb = __skb_clone(dst, src);
+	dst->recycle_flags |= recycle_flags;
+	return skb;
 }
 EXPORT_SYMBOL_GPL(skb_morph);
 
@@ -842,6 +1306,13 @@ int pskb_expand_head(struct sk_buff *skb, int nhead, int ntail,
 	skb->cloned   = 0;
 	skb->hdr_len  = 0;
 	skb->nohdr    = 0;
+
+#if defined(CONFIG_MIPS_BRCM)
+	/* The data buffer of this skb is not pre-allocated any more
+	 * even the skb itself is pre-allocated */
+	skb->recycle_flags &= SKB_DATA_NO_RECYCLE;
+#endif
+
 	atomic_set(&skb_shinfo(skb)->dataref, 1);
 	return 0;
 
@@ -1232,7 +1703,7 @@ unsigned char *__pskb_pull_tail(struct sk_buff *skb, int delta)
 					insp = list;
 				}
 				if (!pskb_pull(list, eat)) {
-					kfree_skb(clone);
+						kfree_skb(clone);
 					return NULL;
 				}
 				break;
@@ -1287,6 +1758,14 @@ int skb_copy_bits(const struct sk_buff *skb, int offset, void *to, int len)
 
 	if (offset > (int)skb->len - len)
 		goto fault;
+
+#ifdef CONFIG_MIPS_BRCM
+	/*
+	 * since we are touching data in src skb (pulling it into the cache),
+	 * disable CACHE_SMARTFLUSH optimization in this skb.
+	 */
+	skb_shinfo(skb)->dirty_p = NULL;
+#endif
 
 	/* Copy header. */
 	if ((copy = start - offset) > 0) {
@@ -1375,8 +1854,8 @@ static inline struct page *linear_to_page(struct page *page, unsigned int *len,
 	if (!p) {
 new_page:
 		p = sk->sk_sndmsg_page = alloc_pages(sk->sk_allocation, 0);
-		if (!p)
-			return NULL;
+	if (!p)
+		return NULL;
 
 		off = sk->sk_sndmsg_off = 0;
 		/* hold one ref to this page until it's full */

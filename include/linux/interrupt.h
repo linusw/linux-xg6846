@@ -14,6 +14,9 @@
 #include <linux/irqflags.h>
 #include <linux/smp.h>
 #include <linux/percpu.h>
+#if defined(CONFIG_MIPS_BRCM)
+#include <linux/hrtimer.h>
+#endif /* CONFIG_MIPS_BRCM */
 
 #include <asm/atomic.h>
 #include <asm/ptrace.h>
@@ -339,9 +342,17 @@ enum
 	SCHED_SOFTIRQ,
 	HRTIMER_SOFTIRQ,
 	RCU_SOFTIRQ,	/* Preferable RCU should always be the last softirq */
+	/* Entries after this are ignored in split softirq mode */
+	MAX_SOFTIRQ,
 
 	NR_SOFTIRQS
 };
+
+typedef  struct {
+	char type;
+	char prio;
+	char nice;
+} softirq_prio_t;
 
 /* map softirq index to softirq name. update 'softirq_to_name' in
  * kernel/softirq.c when adding a new softirq.
@@ -357,14 +368,20 @@ struct softirq_action
 	void	(*action)(struct softirq_action *);
 };
 
+#ifdef CONFIG_PREEMPT_HARDIRQS
+# define __raise_softirq_irqoff(nr) raise_softirq_irqoff(nr)
+# define __do_raise_softirq_irqoff(nr) do { or_softirq_pending(1UL << (nr)); } while (0)
+#else
+# define __raise_softirq_irqoff(nr) do { or_softirq_pending(1UL << (nr)); } while (0)
+# define __do_raise_softirq_irqoff(nr) __raise_softirq_irqoff(nr)
+#endif
+
 asmlinkage void do_softirq(void);
 asmlinkage void __do_softirq(void);
 extern void open_softirq(int nr, void (*action)(struct softirq_action *));
 extern void softirq_init(void);
-#define __raise_softirq_irqoff(nr) do { or_softirq_pending(1UL << (nr)); } while (0)
 extern void raise_softirq_irqoff(unsigned int nr);
 extern void raise_softirq(unsigned int nr);
-extern void wakeup_softirqd(void);
 
 /* This is the worklist that queues up per-cpu softirq work.
  *
@@ -425,13 +442,23 @@ struct tasklet_struct name = { NULL, 0, ATOMIC_INIT(1), func, data }
 enum
 {
 	TASKLET_STATE_SCHED,	/* Tasklet is scheduled for execution */
-	TASKLET_STATE_RUN	/* Tasklet is running (SMP only) */
+	TASKLET_STATE_RUN,	/* Tasklet is running (SMP only) */
+	TASKLET_STATE_PENDING	/* Tasklet is pending */
 };
 
-#ifdef CONFIG_SMP
+#define TASKLET_STATEF_SCHED	(1 << TASKLET_STATE_SCHED)
+#define TASKLET_STATEF_RUN	(1 << TASKLET_STATE_RUN)
+#define TASKLET_STATEF_PENDING	(1 << TASKLET_STATE_PENDING)
+
+#if defined(CONFIG_SMP) || defined(CONFIG_PREEMPT_RT)
 static inline int tasklet_trylock(struct tasklet_struct *t)
 {
 	return !test_and_set_bit(TASKLET_STATE_RUN, &(t)->state);
+}
+
+static inline int tasklet_tryunlock(struct tasklet_struct *t)
+{
+	return cmpxchg(&t->state, TASKLET_STATEF_RUN, 0) == TASKLET_STATEF_RUN;
 }
 
 static inline void tasklet_unlock(struct tasklet_struct *t)
@@ -440,12 +467,11 @@ static inline void tasklet_unlock(struct tasklet_struct *t)
 	clear_bit(TASKLET_STATE_RUN, &(t)->state);
 }
 
-static inline void tasklet_unlock_wait(struct tasklet_struct *t)
-{
-	while (test_bit(TASKLET_STATE_RUN, &(t)->state)) { barrier(); }
-}
+extern void tasklet_unlock_wait(struct tasklet_struct *t);
+
 #else
 #define tasklet_trylock(t) 1
+#define tasklet_tryunlock(t)	1
 #define tasklet_unlock_wait(t) do { } while (0)
 #define tasklet_unlock(t) do { } while (0)
 #endif
@@ -480,23 +506,41 @@ static inline void tasklet_disable(struct tasklet_struct *t)
 	smp_mb();
 }
 
-static inline void tasklet_enable(struct tasklet_struct *t)
-{
-	smp_mb__before_atomic_dec();
-	atomic_dec(&t->count);
-}
-
-static inline void tasklet_hi_enable(struct tasklet_struct *t)
-{
-	smp_mb__before_atomic_dec();
-	atomic_dec(&t->count);
-}
+extern  void tasklet_enable(struct tasklet_struct *t);
+extern  void tasklet_hi_enable(struct tasklet_struct *t);
 
 extern void tasklet_kill(struct tasklet_struct *t);
 extern void tasklet_kill_immediate(struct tasklet_struct *t, unsigned int cpu);
 extern void tasklet_init(struct tasklet_struct *t,
 			 void (*func)(unsigned long), unsigned long data);
+void takeover_tasklets(unsigned int cpu);
 
+#if defined(CONFIG_MIPS_BRCM)
+struct tasklet_hrtimer {
+	struct hrtimer		timer;
+	struct tasklet_struct	tasklet;
+	enum hrtimer_restart	(*function)(struct hrtimer *);
+};
+
+extern void
+tasklet_hrtimer_init(struct tasklet_hrtimer *ttimer,
+		     enum hrtimer_restart (*function)(struct hrtimer *),
+		     clockid_t which_clock, enum hrtimer_mode mode);
+
+static inline
+int tasklet_hrtimer_start(struct tasklet_hrtimer *ttimer, ktime_t time,
+			  const enum hrtimer_mode mode)
+{
+	return hrtimer_start(&ttimer->timer, time, mode);
+}
+
+static inline
+void tasklet_hrtimer_cancel(struct tasklet_hrtimer *ttimer)
+{
+	hrtimer_cancel(&ttimer->timer);
+	tasklet_kill(&ttimer->tasklet);
+}
+#endif /* CONFIG_MIPS_BRCM */
 /*
  * Autoprobing for irqs:
  *

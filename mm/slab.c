@@ -324,7 +324,11 @@ static void cache_reap(struct work_struct *unused);
  */
 static __always_inline int index_of(const size_t size)
 {
+#if defined(CONFIG_MIPS_BRCM) && defined(CONFIG_BRCM_BOUNCE)
+#define __bad_size() printk("__bad_size %d\n", size );
+#else
 	extern void __bad_size(void);
+#endif	
 
 	if (__builtin_constant_p(size)) {
 		int i = 0;
@@ -3423,6 +3427,7 @@ __cache_alloc(struct kmem_cache *cachep, gfp_t flags, void *caller)
 	return objp;
 }
 
+
 /*
  * Caller needs to acquire correct kmem_list's list_lock
  */
@@ -3553,6 +3558,7 @@ static inline void __cache_free(struct kmem_cache *cachep, void *objp)
 	}
 }
 
+
 /**
  * kmem_cache_alloc - Allocate an object
  * @cachep: The cache to allocate from.
@@ -3571,6 +3577,7 @@ void *kmem_cache_alloc(struct kmem_cache *cachep, gfp_t flags)
 	return ret;
 }
 EXPORT_SYMBOL(kmem_cache_alloc);
+
 
 #ifdef CONFIG_KMEMTRACE
 void *kmem_cache_alloc_notrace(struct kmem_cache *cachep, gfp_t flags)
@@ -3641,7 +3648,7 @@ void *kmem_cache_alloc_node_notrace(struct kmem_cache *cachep,
 				    int nodeid)
 {
 	return __cache_alloc_node(cachep, flags, nodeid,
-				  __builtin_return_address(0));
+			__builtin_return_address(0));
 }
 EXPORT_SYMBOL(kmem_cache_alloc_node_notrace);
 #endif
@@ -3752,7 +3759,9 @@ void kmem_cache_free(struct kmem_cache *cachep, void *objp)
 	debug_check_no_locks_freed(objp, obj_size(cachep));
 	if (!(cachep->flags & SLAB_DEBUG_OBJECTS))
 		debug_check_no_obj_freed(objp, obj_size(cachep));
+
 	__cache_free(cachep, objp);
+
 	local_irq_restore(flags);
 
 	trace_kmem_cache_free(_RET_IP_, objp);
@@ -3782,7 +3791,9 @@ void kfree(const void *objp)
 	c = virt_to_cache(objp);
 	debug_check_no_locks_freed(objp, obj_size(c));
 	debug_check_no_obj_freed(objp, obj_size(c));
+
 	__cache_free(c, (void *)objp);
+
 	local_irq_restore(flags);
 }
 EXPORT_SYMBOL(kfree);

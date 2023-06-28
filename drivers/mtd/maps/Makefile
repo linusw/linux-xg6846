@@ -60,5 +60,8 @@ obj-$(CONFIG_MTD_PLATRAM)	+= plat-ram.o
 obj-$(CONFIG_MTD_OMAP_NOR)	+= omap_nor.o
 obj-$(CONFIG_MTD_INTEL_VR_NOR)	+= intel_vr_nor.o
 obj-$(CONFIG_MTD_BFIN_ASYNC)	+= bfin-async-flash.o
-obj-$(CONFIG_MTD_RBTX4939)	+= rbtx4939-flash.o
-obj-$(CONFIG_MTD_VMU)		+= vmu-flash.o
+
+# CONFIG_MIPS_BRCM Begin Broadcom changed code.
+obj-$(CONFIG_MTD_BCM963XX)      += bcm963xx.o
+EXTRA_CFLAGS    		+= -I$(INC_BRCMDRIVER_PUB_PATH)/$(BRCM_BOARD) -I$(INC_BRCMSHARED_PUB_PATH)/$(BRCM_BOARD)
+# CONFIG_MIPS_BRCM End Broadcom changed code.

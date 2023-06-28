@@ -17,6 +17,18 @@
 
 #include "br_private.h"
 
+#if defined(CONFIG_MIPS_BRCM)
+#if defined(CONFIG_BR_IGMP_SNOOP)
+#include "br_igmp.h"
+#endif
+#if defined(CONFIG_BR_MLD_SNOOP)
+#include "br_mld.h"
+#endif
+#if defined(CONFIG_BLOG) && (defined(CONFIG_BR_IGMP_SNOOP) || defined(CONFIG_BR_MLD_SNOOP))
+#include "br_mcast.h"
+#endif
+#endif
+
 static int br_device_event(struct notifier_block *unused, unsigned long event, void *ptr);
 
 struct notifier_block br_device_notifier = {
@@ -34,6 +46,12 @@ static int br_device_event(struct notifier_block *unused, unsigned long event, v
 	struct net_device *dev = ptr;
 	struct net_bridge_port *p = dev->br_port;
 	struct net_bridge *br;
+
+#if defined(CONFIG_MIPS_BRCM) && defined(CONFIG_BLOG)
+#if defined(CONFIG_BR_IGMP_SNOOP) || defined(CONFIG_BR_MLD_SNOOP)
+    br_mcast_handle_netdevice_events(dev, event);
+#endif
+#endif /* CONFIG_MIPS_BRCM */
 
 	/* not a port of a bridge */
 	if (p == NULL)

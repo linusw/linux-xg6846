@@ -45,6 +45,14 @@ struct vlan_dev_info {
 	struct proc_dir_entry			*dent;
 	unsigned long				cnt_inc_headroom_on_tx;
 	unsigned long				cnt_encap_on_xmit;
+#if defined(CONFIG_MIPS_BRCM)
+#ifdef CONFIG_BLOG
+	BlogStats_t bstats; /* stats when the blog promiscuous layer has consumed packets */
+	struct net_device_stats cstats; /* Cummulative Device stats (rx-bytes, tx-pkts, etc...) */
+#endif
+    int nfmark_to_priority;
+#endif
+	
 };
 
 static inline struct vlan_dev_info *vlan_dev_info(const struct net_device *dev)

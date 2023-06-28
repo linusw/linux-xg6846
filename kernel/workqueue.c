@@ -35,6 +35,7 @@
 #include <linux/lockdep.h>
 #include <trace/workqueue.h>
 
+
 /*
  * The per-CPU workqueue (if single thread, we always use the first
  * possible cpu).
@@ -292,6 +293,7 @@ static void run_workqueue(struct cpu_workqueue_struct *cwq)
 		lock_map_acquire(&cwq->wq->lockdep_map);
 		lock_map_acquire(&lockdep_map);
 		f(work);
+		
 		lock_map_release(&lockdep_map);
 		lock_map_release(&cwq->wq->lockdep_map);
 
@@ -305,6 +307,22 @@ static void run_workqueue(struct cpu_workqueue_struct *cwq)
 			debug_show_held_locks(current);
 			dump_stack();
 		}
+
+#ifdef CONFIG_MIPS_BRCM
+		/*
+		 * Our wlan driver currently uses the workqueue mechanism
+		 * (events/0 & events/1) to process pkts.  We also frequently
+		 * configure the events/0 and events/1 threads to RT prio.
+		 * By default, RT prio threads get a timeslice of 200ms, and when
+		 * wlan is busy, it could keep queuing work to this workqueue
+		 * and prevent sirq-net-tx from running for a long time.
+		 * But sirq-net-tx needs to run because it is responsible for
+		 * recycling buffers, so yield the CPU after every function call.
+		 */
+		if (current->policy == SCHED_FIFO || current->policy == SCHED_RR) {
+			yield();
+		}
+#endif
 
 		spin_lock_irq(&cwq->lock);
 		cwq->current_work = NULL;
@@ -781,6 +799,34 @@ static int create_workqueue_thread(struct cpu_workqueue_struct *cwq, int cpu)
 
 	return 0;
 }
+
+#ifdef CONFIG_MIPS_BRCM
+void set_workqueue_thread_prio(struct workqueue_struct *wq, int policy, int prio)
+{
+	struct cpu_workqueue_struct *cwq;
+	struct sched_param param = { .sched_priority = prio };
+
+	if (is_wq_single_threaded(wq))
+	{
+		cwq = per_cpu_ptr(wq->cpu_wq, singlethread_cpu);
+		sched_setscheduler_nocheck(cwq->thread, policy, &param);
+	}
+	else
+	{
+		int cpu;
+		/* do the same thing on each of the workqueue threads */
+		cpu_maps_update_begin();
+
+		for_each_possible_cpu(cpu) {
+			cwq = per_cpu_ptr(wq->cpu_wq, cpu);
+			sched_setscheduler_nocheck(cwq->thread, policy, &param);
+		}
+
+		cpu_maps_update_done();
+	}
+}
+EXPORT_SYMBOL(set_workqueue_thread_prio);
+#endif /* CONFIG_MIPS_BRCM */
 
 static void start_workqueue_thread(struct cpu_workqueue_struct *cwq, int cpu)
 {

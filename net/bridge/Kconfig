@@ -31,3 +31,26 @@ config BRIDGE
 	  will be called bridge.
 
 	  If unsure, say N.
+
+# brcm start
+config BR_IGMP_SNOOP
+	tristate "Bridge IGMPv2/3 Snooping"
+	---help---
+	If you say Y here, it will enable IGMP snooping which optimizes 
+	multicast forwarding
+
+config BR_IGMP_SNOOP_SWITCH_PATCH
+	tristate "Software patch for Switch IGMP Packet flooding"
+	---help---
+	IGMP snooping does not work properly if more than one LAN client is 
+	connected to LAN side & these hosts want to join same IGMP grup. This
+	 problem is due to ROBO switch 5325/5398 flooding igmp report packets 
+	on all LAN ports & IGMP report suppression mechanism. If you say Y, 
+	here it will enable a software patch to avoid this problem.
+
+config BR_MLD_SNOOP
+	tristate "Bridge MLDv1/2 Snooping"
+	---help---
+	If you say Y here, it will enable IPV6 MLD snooping which optimizes 
+	multicast forwarding
+# brcm end

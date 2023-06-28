@@ -21,8 +21,9 @@
 #define EBT_IP_PROTO 0x08
 #define EBT_IP_SPORT 0x10
 #define EBT_IP_DPORT 0x20
+#define EBT_IP_DSCP  0x40  /* brcm */
 #define EBT_IP_MASK (EBT_IP_SOURCE | EBT_IP_DEST | EBT_IP_TOS | EBT_IP_PROTO |\
- EBT_IP_SPORT | EBT_IP_DPORT )
+ EBT_IP_SPORT | EBT_IP_DPORT | EBT_IP_DSCP )
 #define EBT_IP_MATCH "ip"
 
 /* the same values are used for the invflags */
@@ -33,6 +34,7 @@ struct ebt_ip_info
 	__be32 smsk;
 	__be32 dmsk;
 	uint8_t  tos;
+	uint8_t  dscp; /* brcm */
 	uint8_t  protocol;
 	uint8_t  bitmask;
 	uint8_t  invflags;

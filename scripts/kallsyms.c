@@ -71,7 +71,8 @@ static int read_symbol(FILE *in, struct sym_entry *s)
 	if (rc != 3) {
 		if (rc != EOF) {
 			/* skip line */
-			fgets(str, 500, in);
+			if (NULL == fgets(str, 500, in))  //BRCM: check ret val to fix compiler warning
+				fprintf(stderr, "kallsyms: error on fgets\n");
 		}
 		return -1;
 	}

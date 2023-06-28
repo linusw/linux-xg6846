@@ -43,6 +43,7 @@
 #include <asm/div64.h>
 #include <asm/timex.h>
 #include <asm/io.h>
+#include <asm/bounce.h>
 
 u64 jiffies_64 __cacheline_aligned_in_smp = INITIAL_JIFFIES;
 
@@ -945,6 +946,7 @@ static inline void __run_timers(struct tvec_base *base)
 				 * del_timer_sync().
 				 */
 				lock_map_acquire(&lockdep_map);
+				
 
 				fn(data);
 
@@ -1204,6 +1206,7 @@ static inline void update_times(unsigned long ticks)
 
 void do_timer(unsigned long ticks)
 {
+	//bounce_dn();
 	jiffies_64 += ticks;
 	update_times(ticks);
 }

@@ -114,6 +114,10 @@
 #define PRID_IMP_BCM4710	0x4000
 #define PRID_IMP_BCM3302	0x9000
 
+#if defined(CONFIG_MIPS_BRCM)
+#define PRID_IMP_BMIPS4350	0xA000
+#endif
+
 /*
  * These are the PRID's for when 23:16 == PRID_COMP_CAVIUM
  */
@@ -210,6 +214,10 @@ enum cpu_type_enum {
 	 */
 	CPU_4KC, CPU_4KEC, CPU_4KSC, CPU_24K, CPU_34K, CPU_1004K, CPU_74K,
 	CPU_ALCHEMY, CPU_PR4450, CPU_BCM3302, CPU_BCM4710,
+
+#if defined(CONFIG_MIPS_BRCM)
+	CPU_BMIPS4350,
+#endif
 
 	/*
 	 * MIPS64 class processors

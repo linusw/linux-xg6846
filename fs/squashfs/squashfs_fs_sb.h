@@ -61,10 +61,14 @@ struct squashfs_sb_info {
 	__le64			*id_table;
 	__le64			*fragment_index;
 	unsigned int		*fragment_index_2;
+#ifndef 	SQUASHFS_LZMA_ENABLE
 	struct mutex		read_data_mutex;
+#endif
 	struct mutex		meta_index_mutex;
 	struct meta_index	*meta_index;
+#ifndef 	SQUASHFS_LZMA_ENABLE
 	z_stream		stream;
+#endif
 	__le64			*inode_lookup_table;
 	u64			inode_table;
 	u64			directory_table;
@@ -72,5 +76,8 @@ struct squashfs_sb_info {
 	unsigned short		block_log;
 	long long		bytes_used;
 	unsigned int		inodes;
+#ifdef 	SQUASHFS_LZMA_ENABLE	
+	int swap;
+#endif
 };
 #endif

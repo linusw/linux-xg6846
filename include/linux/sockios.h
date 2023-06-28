@@ -88,6 +88,9 @@
 #define SIOCDARP	0x8953		/* delete ARP table entry	*/
 #define SIOCGARP	0x8954		/* get ARP table entry		*/
 #define SIOCSARP	0x8955		/* set ARP table entry		*/
+#if defined(CONFIG_MIPS_BRCM) || !defined(__KERNEL__)
+#define SIOCSDMZ	0x8956
+#endif
 
 /* RARP cache control calls. */
 #define SIOCDRARP	0x8960		/* delete RARP table entry	*/
@@ -124,6 +127,15 @@
 
 /* hardware time stamping: parameters in linux/net_tstamp.h */
 #define SIOCSHWTSTAMP   0x89b0
+
+
+#if defined(CONFIG_MIPS_BRCM) || !defined(__KERNEL__)
+/***********************BRCM global ioctl calls*****************************/
+#define SIOC_BRCM_GLOBAL_BASE    0x89c0
+#define SIOCGIFTRANSSTART  (SIOC_BRCM_GLOBAL_BASE+0)    /* Used by SNMP */
+#define SIOCCIFSTATS  (SIOC_BRCM_GLOBAL_BASE+1)  /* Clean up the Stats of a device */
+#define SIOCGPRIVIFFLAGS	(SIOC_BRCM_GLOBAL_BASE+2)
+#endif //defined(CONFIG_MIPS_BRCM)
 
 /* Device private ioctl calls */
 

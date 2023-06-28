@@ -124,7 +124,13 @@ struct squashfs_cache_entry *squashfs_cache_get(struct super_block *sb,
 			spin_lock(&cache->lock);
 
 			if (entry->length < 0)
+			{
 				entry->error = entry->length;
+#ifdef SQUASHFS_LZMA_ENABLE
+				//we should kick this block out of cache
+				entry->block = SQUASHFS_INVALID_BLK;
+#endif				
+			}
 
 			entry->pending = 0;
 
@@ -235,6 +241,9 @@ struct squashfs_cache *squashfs_cache_init(char *name, int entries,
 {
 	int i, j;
 	struct squashfs_cache *cache = kzalloc(sizeof(*cache), GFP_KERNEL);
+#ifdef SQUASHFS_LZMA_ENABLE
+	char *pCacheAddr = NULL;
+#endif
 
 	if (cache == NULL) {
 		ERROR("Failed to allocate %s cache\n", name);
@@ -270,6 +279,22 @@ struct squashfs_cache *squashfs_cache_init(char *name, int entries,
 			goto cleanup;
 		}
 
+#ifdef SQUASHFS_LZMA_ENABLE
+		//To get continue buffers
+		pCacheAddr = kmalloc(PAGE_CACHE_SIZE*cache->pages, GFP_KERNEL);
+		if(pCacheAddr == NULL)
+		{
+				ERROR("Failed to allocate %s buffer\n", name);
+				goto cleanup;
+		}
+		else
+		{
+			for(j=0; j < cache->pages; j++)
+			{
+				entry->data[j] = pCacheAddr + j*PAGE_CACHE_SIZE;
+			}
+		}
+#else
 		for (j = 0; j < cache->pages; j++) {
 			entry->data[j] = kmalloc(PAGE_CACHE_SIZE, GFP_KERNEL);
 			if (entry->data[j] == NULL) {
@@ -277,6 +302,7 @@ struct squashfs_cache *squashfs_cache_init(char *name, int entries,
 				goto cleanup;
 			}
 		}
+#endif
 	}
 
 	return cache;

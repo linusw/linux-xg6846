@@ -68,6 +68,9 @@ static struct ipv4_devconf ipv4_devconf = {
 		[NET_IPV4_CONF_SEND_REDIRECTS - 1] = 1,
 		[NET_IPV4_CONF_SECURE_REDIRECTS - 1] = 1,
 		[NET_IPV4_CONF_SHARED_MEDIA - 1] = 1,
+#ifdef CONFIG_XAVI_XG6846	
+		[NET_IPV4_CONF_ARP_IGNORE - 1] = 1,	
+#endif		
 	},
 };
 

@@ -39,6 +39,10 @@ ebt_ip_mt(const struct sk_buff *skb, const struct xt_match_param *par)
 	if (info->bitmask & EBT_IP_TOS &&
 	   FWINV(info->tos != ih->tos, EBT_IP_TOS))
 		return false;
+   /* brcm */
+	if (info->bitmask & EBT_IP_DSCP &&
+	   FWINV(info->dscp != (ih->tos & 0xFC), EBT_IP_DSCP))
+		return false;
 	if (info->bitmask & EBT_IP_SOURCE &&
 	   FWINV((ih->saddr & info->smsk) !=
 	   info->saddr, EBT_IP_SOURCE))

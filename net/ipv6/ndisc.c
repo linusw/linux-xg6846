@@ -1022,8 +1022,15 @@ static void ndisc_recv_rs(struct sk_buff *skb)
 		return;
 	}
 
-	/* Don't accept RS if we're not in router mode */
+	/* 
+	 * Don't accept RS if we're not in router mode.
+	 * However, WAN interface needs to act as a host.
+	 */
+#if defined(CONFIG_MIPS_BRCM)
+	if (!idev->cnf.forwarding  || (idev->dev->priv_flags & IFF_WANDEV))
+#else
 	if (!idev->cnf.forwarding)
+#endif
 		goto out;
 
 	/*
@@ -1150,7 +1157,13 @@ static void ndisc_router_discovery(struct sk_buff *skb)
 			   skb->dev->name);
 		return;
 	}
+#if defined(CONFIG_MIPS_BRCM)
+	/* WAN interface needs to act like a host. */
+	if (((in6_dev->cnf.forwarding) && !(in6_dev->dev->priv_flags & IFF_WANDEV))
+		|| (!in6_dev->cnf.accept_ra)) {
+#else
 	if (in6_dev->cnf.forwarding || !in6_dev->cnf.accept_ra) {
+#endif
 		in6_dev_put(in6_dev);
 		return;
 	}
@@ -1447,7 +1460,13 @@ static void ndisc_redirect_rcv(struct sk_buff *skb)
 	in6_dev = in6_dev_get(skb->dev);
 	if (!in6_dev)
 		return;
+#if defined(CONFIG_MIPS_BRCM)
+	/* WAN interface needs to act like a host. */
+	if (((in6_dev->cnf.forwarding) && !(in6_dev->dev->priv_flags & IFF_WANDEV))
+		|| (!in6_dev->cnf.accept_redirects)) {
+#else
 	if (in6_dev->cnf.forwarding || !in6_dev->cnf.accept_redirects) {
+#endif
 		in6_dev_put(in6_dev);
 		return;
 	}

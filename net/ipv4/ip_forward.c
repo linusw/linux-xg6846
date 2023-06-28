@@ -111,6 +111,13 @@ int ip_forward(struct sk_buff *skb)
 
 	skb->priority = rt_tos2priority(iph->tos);
 
+#if defined(CONFIG_MIPS_BRCM)
+	/* Never forward a packet from a WAN intf to the other WAN intf */
+	if( (skb->dev) && (rt->u.dst.dev) && 
+		((skb->dev->priv_flags & rt->u.dst.dev->priv_flags) & IFF_WANDEV) )
+		goto drop;
+#endif
+
 	return NF_HOOK(PF_INET, NF_INET_FORWARD, skb, skb->dev, rt->u.dst.dev,
 		       ip_forward_finish);
 

@@ -49,6 +49,11 @@ union nf_conntrack_expect_proto {
 #include <linux/netfilter/nf_conntrack_h323.h>
 #include <linux/netfilter/nf_conntrack_sane.h>
 #include <linux/netfilter/nf_conntrack_sip.h>
+#include <linux/netfilter/nf_conntrack_rtsp.h>
+
+#ifdef CONFIG_MIPS_BRCM
+#define NF_ALG_BUFFER_SIZE 2000
+#endif /* CONFIG_MIPS_BRCM */
 
 /* per conntrack: application helper private data */
 union nf_conntrack_help {
@@ -57,7 +62,12 @@ union nf_conntrack_help {
 	struct nf_ct_pptp_master ct_pptp_info;
 	struct nf_ct_h323_master ct_h323_info;
 	struct nf_ct_sane_master ct_sane_info;
+#ifndef CONFIG_MIPS_BRCM
 	struct nf_ct_sip_master ct_sip_info;
+#endif
+#ifdef CONFIG_MIPS_BRCM
+	struct nf_ct_rtsp_master ct_rtsp_info;
+#endif
 };
 
 #include <linux/types.h>
@@ -73,7 +83,11 @@ union nf_conntrack_help {
 struct nf_conntrack_helper;
 
 /* Must be kept in sync with the classes defined by helpers */
+#ifdef CONFIG_MIPS_BRCM
+#define NF_CT_MAX_EXPECT_CLASSES	4
+#else
 #define NF_CT_MAX_EXPECT_CLASSES	3
+#endif
 
 /* nf_conn feature for connections that have a helper */
 struct nf_conn_help {
@@ -96,15 +110,35 @@ struct nf_conn {
            plus 1 for any connection(s) we are `master' for */
 	struct nf_conntrack ct_general;
 
-	/* XXX should I move this to the tail ? - Y.K */
-	/* These are my tuples; original and reply */
-	struct nf_conntrack_tuple_hash tuplehash[IP_CT_DIR_MAX];
+#if defined(CONFIG_MIPS_BRCM) 
+#if defined(CONFIG_BLOG)
+	unsigned int blog_key[2];	/* Associating 2=IP_CT_DIR_MAX blogged flows */
+#endif
+	struct list_head safe_list; /* bugfix for lost connections */
+	struct list_head derived_connections; /* Used by master connection */
+	struct list_head derived_list; /* Used by child connection */
+	unsigned derived_timeout;	/* 0 means no derived_timeout, 0xFFFFFFFF
+								 * means never timeout until master ct is
+								 * disconnected, others means timeout secs */
 
 	/* Have we seen traffic both ways yet? (bitset) */
 	unsigned long status;
 
+#if defined(CONFIG_NF_DYNDSCP) || defined(CONFIG_NF_DYNDSCP_MODULE)
+	struct nf_tos_inheritance {
+		u_int16_t status;
+		u_int8_t dscp[2];		/* IP_CT_DIR_MAX */
+	}dyndscp; 
+#endif
+#endif //defined(CONFIG_MIPS_BRCM)
+	/*---------- Add any custom fields below this line ----------*/
+
 	/* If we were expected by an expectation, this will be it */
 	struct nf_conn *master;
+
+	/* XXX should I move this to the tail ? - Y.K */
+	/* These are my tuples; original and reply */
+	struct nf_conntrack_tuple_hash tuplehash[IP_CT_DIR_MAX];
 
 	/* Timer function; drops refcnt when it goes off. */
 	struct timer_list timeout;

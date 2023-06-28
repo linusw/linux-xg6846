@@ -2539,7 +2539,87 @@ void pci_fixup_device(enum pci_fixup_pass pass, struct pci_dev *dev)
 	}
 	pci_do_fixups(dev, start, end);
 }
+
+#else
+#if defined(CONFIG_MIPS_BRCM)
+static void pci_do_fixups(struct pci_dev *dev, struct pci_fixup *f,
+                          struct pci_fixup *end)
+{
+        while (f < end) {
+                if ((f->vendor == dev->vendor || f->vendor == (u16) PCI_ANY_ID) &&
+                    (f->device == dev->device || f->device == (u16) PCI_ANY_ID)) {
+                        dev_dbg(&dev->dev, "calling %pF\n", f->hook);
+                        f->hook(dev);
+                }
+                f++;
+        }
+}
+
+extern struct pci_fixup __start_pci_fixups_early[];
+extern struct pci_fixup __end_pci_fixups_early[];
+extern struct pci_fixup __start_pci_fixups_header[];
+extern struct pci_fixup __end_pci_fixups_header[];
+extern struct pci_fixup __start_pci_fixups_final[];
+extern struct pci_fixup __end_pci_fixups_final[];
+extern struct pci_fixup __start_pci_fixups_enable[];
+extern struct pci_fixup __end_pci_fixups_enable[];
+extern struct pci_fixup __start_pci_fixups_resume[];
+extern struct pci_fixup __end_pci_fixups_resume[];
+extern struct pci_fixup __start_pci_fixups_resume_early[];
+extern struct pci_fixup __end_pci_fixups_resume_early[];
+extern struct pci_fixup __start_pci_fixups_suspend[];
+extern struct pci_fixup __end_pci_fixups_suspend[];
+
+void pci_fixup_device(enum pci_fixup_pass pass, struct pci_dev *dev)
+{
+        struct pci_fixup *start, *end;
+
+        switch(pass) {
+        case pci_fixup_early:
+                start = __start_pci_fixups_early;
+                end = __end_pci_fixups_early;
+                break;
+
+        case pci_fixup_header:
+                start = __start_pci_fixups_header;
+                end = __end_pci_fixups_header;
+                break;
+
+        case pci_fixup_final:
+                start = __start_pci_fixups_final;
+                end = __end_pci_fixups_final;
+                break;
+
+        case pci_fixup_enable:
+                start = __start_pci_fixups_enable;
+                end = __end_pci_fixups_enable;
+                break;
+
+        case pci_fixup_resume:
+                start = __start_pci_fixups_resume;
+                end = __end_pci_fixups_resume;
+                break;
+
+        case pci_fixup_resume_early:
+                start = __start_pci_fixups_resume_early;
+                end = __end_pci_fixups_resume_early;
+                break;
+
+        case pci_fixup_suspend:
+                start = __start_pci_fixups_suspend;
+                end = __end_pci_fixups_suspend;
+                break;
+
+        default:
+                /* stupid compiler warning, you would think with an enum... */
+                return;
+        }
+        pci_do_fixups(dev, start, end);
+}
+
 #else
 void pci_fixup_device(enum pci_fixup_pass pass, struct pci_dev *dev) {}
+#endif //CONFIG_MIPS_BRCM
 #endif
+
 EXPORT_SYMBOL(pci_fixup_device);

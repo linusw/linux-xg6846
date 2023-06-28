@@ -11,6 +11,11 @@ struct esp_data {
 
 	/* Confidentiality & Integrity */
 	struct crypto_aead *aead;
+#if defined(CONFIG_MIPS_BRCM)
+#if defined(CONFIG_BCM_SPU) || defined(CONFIG_BCM_SPU_MODULE)
+	void *hwctx;
+#endif
+#endif
 };
 
 extern void *pskb_put(struct sk_buff *skb, struct sk_buff *tail, int len);

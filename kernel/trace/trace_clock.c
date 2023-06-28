@@ -66,13 +66,50 @@ u64 notrace trace_clock(void)
  * Used by plugins that need globally coherent timestamps.
  */
 
+#ifdef CONFIG_MIPS_BRCM
+#include <linux/clocksource.h>
+#else
 static u64 prev_trace_clock_time;
 
 static raw_spinlock_t trace_clock_lock ____cacheline_aligned_in_smp =
 	(raw_spinlock_t)__RAW_SPIN_LOCK_UNLOCKED;
+#endif
+
 
 u64 notrace trace_clock_global(void)
 {
+#ifdef CONFIG_MIPS_BRCM
+	/*
+	 * For BRCM BCA tracing, use a hacked up version of getrawmonotonic,
+	 * the hack is no locking.  (with locking, the system locks up.)
+	 * We might occasionally get a bad reading if the time is being updated
+	 * while we are getting a timestamp.  Try to re-introduce the lock after
+	 * we upgrade ftrace code to 2.6.34.
+	 */
+//	unsigned long seq;
+	u64 now;
+	s64 nsecs;
+    cycle_t cycle_now, cycle_delta;
+    struct timespec ts;
+
+ //   do {
+ //   	seq = read_seqbegin(&xtime_lock);
+    	cycle_now = clocksource_read(clock);
+    	cycle_delta = (cycle_now - clock->cycle_last) & clock->mask;
+
+    	/* convert to nanoseconds: */
+    	nsecs = ((s64)cycle_delta * clock->mult_orig) >> clock->shift;
+
+    	ts = clock->raw_time;
+
+  //  } while (read_seqretry(&xtime_lock, seq));
+
+	timespec_add_ns(&ts, nsecs);
+
+	/* truncate the seconds fields to 4 digits */
+    now = ((u64)(ts.tv_sec % 10000)) * NSEC_PER_SEC + ts.tv_nsec;
+
+#else
 	unsigned long flags;
 	int this_cpu;
 	u64 now;
@@ -104,6 +141,8 @@ u64 notrace trace_clock_global(void)
 
  out:
 	raw_local_irq_restore(flags);
+
+#endif /* CONFIG_MIPS_BRCM */
 
 	return now;
 }

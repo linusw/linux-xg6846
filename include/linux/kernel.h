@@ -111,6 +111,10 @@ extern int console_printk[];
 #define minimum_console_loglevel (console_printk[2])
 #define default_console_loglevel (console_printk[3])
 
+#ifdef CONFIG_MIPS_BRCM
+extern int printk_with_interrupts_enabled;
+#endif
+
 struct completion;
 struct pt_regs;
 struct user;

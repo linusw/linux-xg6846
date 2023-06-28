@@ -19,6 +19,130 @@
 #include <asm/uaccess.h>
 #include "br_private.h"
 
+#if defined(CONFIG_MIPS_BRCM)
+#include <linux/blog.h>
+#if defined(CONFIG_BR_IGMP_SNOOP)
+#include "br_igmp.h"
+#endif
+#if defined(CONFIG_BR_MLD_SNOOP)
+#include "br_mld.h"
+#endif
+#endif
+
+static struct net_device_stats *br_dev_get_stats(struct net_device *dev)
+{
+	//struct net_bridge *br = netdev_priv(dev);
+	//return &br->statistics;
+	return &dev->stats;
+	
+}
+
+#if defined(CONFIG_MIPS_BRCM) && defined(CONFIG_BLOG)
+static BlogStats_t * br_dev_get_bstats(struct net_device *dev)
+{
+	struct net_bridge *br = netdev_priv(dev);
+
+	return &br->bstats;
+}
+
+static struct net_device_stats *br_dev_get_cstats(struct net_device *dev)
+{
+	struct net_bridge *br = netdev_priv(dev);
+
+	return &br->cstats;
+}
+
+static struct net_device_stats * br_dev_collect_stats(struct net_device *dev_p)
+{
+	BlogStats_t bStats;
+	BlogStats_t * bStats_p;
+	struct net_device_stats *dStats_p;
+	struct net_device_stats *cStats_p;
+
+	if ( dev_p == (struct net_device *)NULL )
+		return (struct net_device_stats *)NULL;
+
+	dStats_p = br_dev_get_stats(dev_p);
+	cStats_p = br_dev_get_cstats(dev_p);
+	bStats_p = br_dev_get_bstats(dev_p);
+
+	memset(&bStats, 0, sizeof(BlogStats_t));
+
+	blog_notify(FETCH_NETIF_STATS, (void*)dev_p,
+				(uint32_t)&bStats, BLOG_PARAM2_NO_CLEAR);
+
+	memcpy( cStats_p, dStats_p, sizeof(struct net_device_stats) );
+	cStats_p->rx_packets += ( bStats.rx_packets + bStats_p->rx_packets );
+	cStats_p->tx_packets += ( bStats.tx_packets + bStats_p->tx_packets );
+
+	/* set byte counts to 0 if the bstat packet counts are non 0 and the
+		octet counts are 0 */
+	if ( ((bStats.rx_bytes + bStats_p->rx_bytes) == 0) &&
+		  ((bStats.rx_packets + bStats_p->rx_packets) > 0) )
+	{
+		cStats_p->rx_bytes = 0;
+	}
+	else
+	{
+		cStats_p->rx_bytes   += ( bStats.rx_bytes   + bStats_p->rx_bytes );
+	}
+
+	if ( ((bStats.tx_bytes + bStats_p->tx_bytes) == 0) &&
+		  ((bStats.tx_packets + bStats_p->tx_packets) > 0) )
+	{
+		cStats_p->tx_bytes = 0;
+	}
+	else
+	{
+		cStats_p->tx_bytes   += ( bStats.tx_bytes   + bStats_p->tx_bytes );
+	}
+	cStats_p->multicast  += ( bStats.multicast  + bStats_p->multicast );
+
+	return cStats_p;
+}
+
+static void br_dev_update_stats(struct net_device * dev_p, 
+                                BlogStats_t * blogStats_p)
+{
+	BlogStats_t * bStats_p;
+
+	if ( dev_p == (struct net_device *)NULL )
+		return;
+
+	bStats_p = br_dev_get_bstats(dev_p);
+
+	bStats_p->rx_packets += blogStats_p->rx_packets;
+	bStats_p->tx_packets += blogStats_p->tx_packets;
+	bStats_p->rx_bytes   += blogStats_p->rx_bytes;
+	bStats_p->tx_bytes   += blogStats_p->tx_bytes;
+	bStats_p->multicast  += blogStats_p->multicast;
+
+	return;
+}
+
+static void br_dev_clear_stats(struct net_device * dev_p)
+{
+	BlogStats_t * bStats_p;
+	struct net_device_stats *dStats_p;
+	struct net_device_stats *cStats_p;
+
+	if ( dev_p == (struct net_device *)NULL )
+		return;
+
+	dStats_p = br_dev_get_stats(dev_p);
+	cStats_p = br_dev_get_cstats(dev_p); 
+	bStats_p = br_dev_get_bstats(dev_p);
+
+    blog_notify(FETCH_NETIF_STATS, (void*)dev_p, 0, BLOG_PARAM2_DO_CLEAR);
+
+	memset(bStats_p, 0, sizeof(BlogStats_t));
+	memset(dStats_p, 0, sizeof(struct net_device_stats));
+	memset(cStats_p, 0, sizeof(struct net_device_stats));
+
+	return;
+}
+#endif
+
 /* net device transmit always called with no BH (preempt_disabled) */
 int br_dev_xmit(struct sk_buff *skb, struct net_device *dev)
 {
@@ -26,14 +150,30 @@ int br_dev_xmit(struct sk_buff *skb, struct net_device *dev)
 	const unsigned char *dest = skb->data;
 	struct net_bridge_fdb_entry *dst;
 
+#if defined(CONFIG_MIPS_BRCM) && defined(CONFIG_BLOG)
+    blog_link(IF_DEVICE, blog_ptr(skb), (void*)dev, DIR_TX, skb->len);
+#endif
+
 	dev->stats.tx_packets++;
 	dev->stats.tx_bytes += skb->len;
 
 	skb_reset_mac_header(skb);
 	skb_pull(skb, ETH_HLEN);
 
-	if (dest[0] & 1)
+#if defined(CONFIG_MIPS_BRCM) && defined(CONFIG_BR_MLD_SNOOP)
+	if ((BR_MLD_MULTICAST_MAC_PREFIX == dest[0]) && 
+	    (BR_MLD_MULTICAST_MAC_PREFIX == dest[1])) {
+		if (!br_mld_mc_forward(br, skb, 0, 1)) 
+			br_flood_deliver(br, skb);
+	}
+	else
+#endif
+	if (is_multicast_ether_addr(dest)) {
+#if defined(CONFIG_MIPS_BRCM) && defined(CONFIG_BR_IGMP_SNOOP)
+		if (!br_igmp_mc_forward(br, skb, 0, 1))		
+#endif
 		br_flood_deliver(br, skb);
+	}
 	else if ((dst = __br_fdb_get(br, dest)) != NULL)
 		br_deliver(dst->dst, skb);
 	else
@@ -41,6 +181,9 @@ int br_dev_xmit(struct sk_buff *skb, struct net_device *dev)
 
 	return 0;
 }
+
+
+
 
 static int br_dev_open(struct net_device *dev)
 {
@@ -168,12 +311,23 @@ static const struct net_device_ops br_netdev_ops = {
 	.ndo_set_multicast_list	 = br_dev_set_multicast_list,
 	.ndo_change_mtu		 = br_change_mtu,
 	.ndo_do_ioctl		 = br_dev_ioctl,
+#ifdef CONFIG_BLOG
+        .ndo_get_stats           = br_dev_collect_stats,
+#else
+        .ndo_get_stats           = br_dev_get_stats
+#endif
 };
 
 void br_dev_setup(struct net_device *dev)
 {
 	random_ether_addr(dev->dev_addr);
 	ether_setup(dev);
+
+#ifdef CONFIG_BLOG
+	dev->put_stats = br_dev_update_stats;
+	dev->clr_stats = br_dev_clear_stats;
+#endif
+
 
 	dev->netdev_ops = &br_netdev_ops;
 	dev->destructor = free_netdev;

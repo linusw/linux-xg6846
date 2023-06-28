@@ -23,6 +23,8 @@
  * squashfs_fs.h
  */
 
+#define SQUASHFS_LZMA_ENABLE
+
 #define SQUASHFS_CACHED_FRAGMENTS	CONFIG_SQUASHFS_FRAGMENT_CACHE_SIZE
 #define SQUASHFS_MAJOR			4
 #define SQUASHFS_MINOR			0
@@ -36,7 +38,14 @@
 #define SQUASHFS_FILE_SIZE		131072
 #define SQUASHFS_FILE_LOG		17
 
+#if defined(CONFIG_MIPS_BRCM)
+/* The size determines the size of buffers SquashFS will allocate. */
+/* It can be reduced to save RAM, at the expense of Flash space. */
+#define SQUASHFS_FILE_MAX_SIZE		CONFIG_SQUASHFS_BLOCK_SIZE
+#else
 #define SQUASHFS_FILE_MAX_SIZE		1048576
+#endif
+
 #define SQUASHFS_FILE_MAX_LOG		20
 
 /* Max number of uids and gids */
@@ -376,5 +385,29 @@ struct squashfs_fragment_entry {
 	__le32			size;
 	unsigned int		unused;
 };
+
+#ifdef SQUASHFS_LZMA_ENABLE
+#include "sqlzma.h"
+#include "sqmagic.h"
+
+#undef KeepPreemptive
+#if defined(CONFIG_PREEMPT) && !defined(UnsquashNoPreempt)
+#define KeepPreemptive
+#endif
+
+struct sqlzma {
+#ifdef KeepPreemptive
+	struct mutex mtx;
+#endif
+	unsigned char read_data[SQUASHFS_FILE_MAX_SIZE];
+	struct sqlzma_un un;
+};
+
+#define dpri(fmt, args...) /*printk("%s:%d: " fmt, __func__, __LINE__, ##args) */
+#define dpri_un(un)	dpri("un{%d, {%d %p}, {%d %p}, {%d %p}}\n", \
+			     (un)->un_lzma, (un)->un_a[0].sz, (un)->un_a[0].buf, \
+			     (un)->un_a[1].sz, (un)->un_a[1].buf, \
+			     (un)->un_a[2].sz, (un)->un_a[2].buf)
+#endif
 
 #endif

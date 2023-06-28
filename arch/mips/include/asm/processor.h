@@ -337,6 +337,10 @@ unsigned long get_wchan(struct task_struct *p);
 
 #define ARCH_HAS_PREFETCH
 
+#if defined(CONFIG_MIPS_BRCM) && defined(CONFIG_BRCM_BOUNCE)
+/* Bounce traces get swamped with prefetch */
+static inline void prefetch(const void *addr) __attribute__((no_instrument_function));
+#endif
 static inline void prefetch(const void *addr)
 {
 	__asm__ __volatile__(

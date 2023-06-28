@@ -189,8 +189,9 @@ SUBARCH := $(shell uname -m | sed -e s/i.86/i386/ -e s/sun4u/sparc64/ \
 # Alternatively CROSS_COMPILE can be set in the environment.
 # Default value for CROSS_COMPILE is not to prefix executables
 # Note: Some architectures assign CROSS_COMPILE in their arch/*/Makefile
+
 export KBUILD_BUILDHOST := $(SUBARCH)
-ARCH		?= $(SUBARCH)
+ARCH		?= mips
 CROSS_COMPILE	?=
 
 # Architecture as present in compile.h
@@ -231,7 +232,18 @@ CONFIG_SHELL := $(shell if [ -x "$$BASH" ]; then echo $$BASH; \
 
 HOSTCC       = gcc
 HOSTCXX      = g++
-HOSTCFLAGS   = -Wall -Wstrict-prototypes -O2 -fomit-frame-pointer
+
+#CONFIG_MIPS_BRCM: begin
+IS_GCC4 := $(shell $(HOSTCC) -v 2>&1 | grep "gcc version 4.")
+ifneq ($(IS_GCC4),)
+BCM_HOST_FATAL_FLAGS := -Werror -Wfatal-errors
+endif
+
+HOSTCFLAGS   = -Wall -Wstrict-prototypes -O2 -fomit-frame-pointer \
+               $(BCM_HOST_FATAL_FLAGS)
+#orig: HOSTCFLAGS   = -Wall -Wstrict-prototypes -O2 -fomit-frame-pointer
+#CONFIG_MIPS_BRCM: end
+
 HOSTCXXFLAGS = -O2
 
 # Decide whether to build built-in, modular, or both.
@@ -336,7 +348,7 @@ MODFLAGS	= -DMODULE
 CFLAGS_MODULE   = $(MODFLAGS)
 AFLAGS_MODULE   = $(MODFLAGS)
 LDFLAGS_MODULE  =
-CFLAGS_KERNEL	=
+CFLAGS_KERNEL	= 
 AFLAGS_KERNEL	=
 
 
@@ -480,6 +492,12 @@ libs-y		:= lib/
 core-y		:= usr/
 endif # KBUILD_EXTMOD
 
+# CONFIG_MIPS_BRCM Begin Broadcom changed code.
+export HPATH 	:= $(TOPDIR)/include
+brcmdrivers-y	:= $(INC_BRCMBOARDPARMS_PATH)/$(BRCM_BOARD)/ $(BRCMDRIVERS_DIR)/ $(INC_SPI_PATH)/ $(INC_FLASH_PATH)/ $(INC_UTILS_PATH)/
+BRCMDRIVERS	:= $(brcmdrivers-y)
+# CONFIG_MIPS_BRCM End Broadcom changed code.
+
 ifeq ($(dot-config),1)
 # Read in config
 -include include/config/auto.conf
@@ -523,7 +541,12 @@ endif # $(dot-config)
 # command line.
 # This allow a user to issue only 'make' to build a kernel including modules
 # Defaults vmlinux but it is usually overridden in the arch makefile
-all: vmlinux
+#all: vmlinux
+
+# CONFIG_MIPS_BRCM Begin Broadcom changed code.
+all: __vmlinux
+# CONFIG_MIPS_BRCM End Broadcom changed code.
+
 
 ifdef CONFIG_CC_OPTIMIZE_FOR_SIZE
 KBUILD_CFLAGS	+= -Os
@@ -578,6 +601,11 @@ KBUILD_CFLAGS	+= $(call cc-option,-fwrapv)
 # revert to pre-gcc-4.4 behaviour of .eh_frame
 KBUILD_CFLAGS	+= $(call cc-option,-fno-dwarf2-cfi-asm)
 
+# defining DCFG_LINUX_NET_PACKED flag builds the linux net structures 
+# with packed attribute to avoid unaligned access
+KBUILD_CFLAGS += -DCFG_LINUX_NET_PACKED
+
+
 # Add user supplied CPPFLAGS, AFLAGS and CFLAGS as the last assignments
 # But warn user when we do so
 warn-assign = \
@@ -596,11 +624,18 @@ ifneq ($(KCFLAGS),)
         KBUILD_CFLAGS += $(KCFLAGS)
 endif
 
+#BRCM begin
+KBUILD_CFLAGS += $(BRCM_WERRORS_CFLAGS)
+#BRCM end
+
 # Use --build-id when available.
-LDFLAGS_BUILD_ID = $(patsubst -Wl$(comma)%,%,\
-			      $(call ld-option, -Wl$(comma)--build-id,))
-LDFLAGS_MODULE += $(LDFLAGS_BUILD_ID)
-LDFLAGS_vmlinux += $(LDFLAGS_BUILD_ID)
+# BRCM: build-id causing compiler warnings, not supported on our mips ld?
+# BRCM: maybe enable again on the next toolchain upgrade
+# BRCM: See fedoraproject.org/wiki/Releases/FeatureBuildId
+# LDFLAGS_BUILD_ID = $(patsubst -Wl$(comma)%,%,\
+# 			      $(call ld-option, -Wl$(comma)--build-id,))
+# LDFLAGS_MODULE += $(LDFLAGS_BUILD_ID)
+# LDFLAGS_vmlinux += $(LDFLAGS_BUILD_ID)
 
 ifeq ($(CONFIG_STRIP_ASM_SYMS),y)
 LDFLAGS_vmlinux	+= -X
@@ -623,6 +658,10 @@ export	INSTALL_PATH ?= /boot
 # relocations required by build roots.  This is not defined in the
 # makefile but the argument can be passed to make if needed.
 #
+
+# CONFIG_MIPS_BRCM Begin Broadcom changed code.
+INSTALL_MOD_PATH := $(PROFILE_DIR)/modules
+# CONFIG_MIPS_BRCM End Broadcom changed code.
 
 MODLIB	= $(INSTALL_MOD_PATH)/lib/modules/$(KERNELRELEASE)
 export MODLIB
@@ -648,18 +687,38 @@ export mod_strip_cmd
 ifeq ($(KBUILD_EXTMOD),)
 core-y		+= kernel/ mm/ fs/ ipc/ security/ crypto/ block/
 
+# CONFIG_MIPS_BRCM Begin Broadcom changed code.
+# Split vmlinux-dirs to code that must be compiled before bcmdrivers,
+# bcmdrivers, and code that must be compiled after bcmdrivers.
+# This allows us to compile bcmdrivers with -j 1 and everything else
+# with -j
 vmlinux-dirs	:= $(patsubst %/,%,$(filter %/, $(init-y) $(init-m) \
 		     $(core-y) $(core-m) $(drivers-y) $(drivers-m) \
+		     $(brcmdrivers-y) $(brcmdrivers-m) \
+		     $(net-y) $(net-m) $(libs-y) $(libs-m)))
+
+vmlinux-dirs-1	:= $(patsubst %/,%,$(filter %/, $(init-y) $(init-m) \
+		     $(core-y) $(core-m) $(drivers-y) $(drivers-m)))
+
+brcmdriver-dirs	:= $(patsubst %/,%,$(filter %/, \
+		     $(brcmdrivers-y) $(brcmdrivers-m)))
+
+vmlinux-dirs-2	:= $(patsubst %/,%,$(filter %/, \
 		     $(net-y) $(net-m) $(libs-y) $(libs-m)))
 
 vmlinux-alldirs	:= $(sort $(vmlinux-dirs) $(patsubst %/,%,$(filter %/, \
 		     $(init-n) $(init-) \
 		     $(core-n) $(core-) $(drivers-n) $(drivers-) \
+		     $(brcmdrivers-n) $(brcmdrivers-) \
 		     $(net-n)  $(net-)  $(libs-n)    $(libs-))))
+# CONFIG_MIPS_BRCM End Broadcom changed code.
 
 init-y		:= $(patsubst %/, %/built-in.o, $(init-y))
 core-y		:= $(patsubst %/, %/built-in.o, $(core-y))
 drivers-y	:= $(patsubst %/, %/built-in.o, $(drivers-y))
+# CONFIG_MIPS_BRCM Begin Broadcom changed code.
+brcmdrivers-y   := $(patsubst %/, %/built-in.o, $(brcmdrivers-y))
+# CONFIG_MIPS_BRCM End Broadcom changed code.
 net-y		:= $(patsubst %/, %/built-in.o, $(net-y))
 libs-y1		:= $(patsubst %/, %/lib.a, $(libs-y))
 libs-y2		:= $(patsubst %/, %/built-in.o, $(libs-y))
@@ -693,7 +752,7 @@ libs-y		:= $(libs-y1) $(libs-y2)
 # System.map is generated to document addresses of all kernel symbols
 
 vmlinux-init := $(head-y) $(init-y)
-vmlinux-main := $(core-y) $(libs-y) $(drivers-y) $(net-y)
+vmlinux-main := $(core-y) $(libs-y) $(drivers-y) $(brcmdrivers-y) $(net-y)
 vmlinux-all  := $(vmlinux-init) $(vmlinux-main)
 vmlinux-lds  := arch/$(SRCARCH)/kernel/vmlinux.lds
 export KBUILD_VMLINUX_OBJS := $(vmlinux-all)
@@ -842,6 +901,12 @@ define rule_vmlinux-modpost
 endef
 
 # vmlinux image - including updated kernel symbols
+# CONFIG_MIPS_BRCM Begin Broadcom changed code.
+
+__vmlinux: preparebrcmdriver vmlinux
+
+# CONFIG_MIPS_BRCM End Broadcom changed code.
+
 vmlinux: $(vmlinux-lds) $(vmlinux-init) $(vmlinux-main) vmlinux.o $(kallsyms.o) FORCE
 ifdef CONFIG_HEADERS_CHECK
 	$(Q)$(MAKE) -f $(srctree)/Makefile headers_check
@@ -867,7 +932,10 @@ vmlinux.o: $(modpost-init) $(vmlinux-main) FORCE
 
 # The actual objects are generated when descending, 
 # make sure no implicit rule kicks in
-$(sort $(vmlinux-init) $(vmlinux-main)) $(vmlinux-lds): $(vmlinux-dirs) ;
+# CONFIG_MIPS_BRCM Begin Broadcom changed code.
+
+#$(sort $(vmlinux-init) $(vmlinux-main)) $(vmlinux-lds): $(vmlinux-dirs) ;
+$(sort $(vmlinux-init) $(vmlinux-main)) $(vmlinux-lds): $(vmlinux-dirs-1) $(brcmdriver-dirs) $(vmlinux-dirs-2);
 
 # Handle descending into subdirectories listed in $(vmlinux-dirs)
 # Preset locale variables to speed up the build process. Limit locale
@@ -875,9 +943,24 @@ $(sort $(vmlinux-init) $(vmlinux-main)) $(vmlinux-lds): $(vmlinux-dirs) ;
 # make menuconfig etc.
 # Error messages still appears in the original language
 
-PHONY += $(vmlinux-dirs)
-$(vmlinux-dirs): prepare scripts
-	$(Q)$(MAKE) $(build)=$@
+#PHONY += $(vmlinux-dirs)
+#$(vmlinux-dirs): prepare scripts
+#	$(Q)$(MAKE) $(build)=$@
+
+PHONY += $(vmlinux-dirs-1)
+$(vmlinux-dirs-1): prepare scripts
+	$(Q)$(MAKE) BCM_FATAL_FLAGS='-g -Werror -Wfatal-errors' $(build)=$@
+
+# temporary: force bcmdriver compile to be serialized using -j1
+PHONY += $(brcmdriver-dirs)
+$(brcmdriver-dirs): $(vmlinux-dirs-1) preparebrcmdriver
+	$(Q)$(MAKE) -j1 $(build)=$@
+
+PHONY += $(vmlinux-dirs-2)
+$(vmlinux-dirs-2): $(brcmdriver-dirs)
+	$(Q)$(MAKE) BCM_FATAL_FLAGS='-g -Werror -Wfatal-errors' $(build)=$@
+
+# CONFIG_MIPS_BRCM End Broadcom changed code.
 
 # Build the kernel release string
 #
@@ -925,11 +1008,14 @@ localver = $(subst $(space),, $(string) \
 # from the copied source
 ifdef CONFIG_LOCALVERSION_AUTO
 
+ifeq ($(strip $(XAVI_MODEL_NAME)),)
+# XAVI 20100709 Dom Fixed check from svn make link error issue.
 ifeq ($(wildcard .scmversion),)
         _localver-auto = $(shell $(CONFIG_SHELL) \
                          $(srctree)/scripts/setlocalversion $(srctree))
 else
         _localver-auto = $(shell cat .scmversion 2> /dev/null)
+endif
 endif
 
 	localver-auto  = $(LOCALVERSION)$(_localver-auto)
@@ -951,7 +1037,16 @@ include/config/kernel.release: include/config/auto.conf FORCE
 # version.h and scripts_basic is processed / created.
 
 # Listed in dependency order
-PHONY += prepare archprepare prepare0 prepare1 prepare2 prepare3
+# CONFIG_MIPS_BRCM Begin Broadcom changed code.
+PHONY += prepare archprepare prepare0 prepare1 prepare2 prepare3 preparebrcmdriver
+# CONFIG_MIPS_BRCM End Broadcom changed code.
+
+
+# CONFIG_MIPS_BRCM Begin Broadcom changed code.
+preparebrcmdriver:
+	$(Q)$(MAKE) -C $(BRCMDRIVERS_DIR) symlinks
+# CONFIG_MIPS_BRCM End Broadcom changed code.
+
 
 # prepare3 is used to check if we are building in a separate output directory,
 # and if so do:
@@ -1131,11 +1226,16 @@ all: modules
 #	using awk while concatenating to the final file.
 
 PHONY += modules
-modules: $(vmlinux-dirs) $(if $(KBUILD_BUILTIN),vmlinux)
-	$(Q)$(AWK) '!x[$$0]++' $(vmlinux-dirs:%=$(objtree)/%/modules.order) > $(objtree)/modules.order
+
+# CONFIG_MIPS_BRCM Begin Broadcom changed code.
+#modules: preparebrcmdriver $(vmlinux-dirs) $(if $(KBUILD_BUILTIN),vmlinux)
+modules: $(vmlinux-dirs-2) $(if $(KBUILD_BUILTIN),vmlinux)
+	#$(Q)$(AWK) '!x[$$0]++' $(vmlinux-dirs:%=$(objtree)/%/modules.order) > $(objtree)/modules.order
+	$(Q)$(AWK) '!x[$$0]++' $(vmlinux-dirs:%=%/modules.order) > $(objtree)/modules.order
 	@$(kecho) '  Building modules, stage 2.';
 	$(Q)$(MAKE) -f $(srctree)/scripts/Makefile.modpost
 	$(Q)$(MAKE) -f $(srctree)/scripts/Makefile.fwinst obj=firmware __fw_modbuild
+# CONFIG_MIPS_BRCM End Broadcom changed code.
 
 
 # Target to prepare building external modules
@@ -1144,24 +1244,32 @@ modules_prepare: prepare scripts
 
 # Target to install modules
 PHONY += modules_install
-modules_install: _modinst_ _modinst_post
+# CONFIG_MIPS_BRCM Begin Broadcom changed code.
+#modules_install: _modinst_ _modinst_post
+#We have no need for it "_modinst_post"
+modules_install: _modinst_ 
+# CONFIG_MIPS_BRCM End Broadcom changed code.
 
 PHONY += _modinst_
 _modinst_:
-	@if [ -z "`$(DEPMOD) -V 2>/dev/null | grep module-init-tools`" ]; then \
-		echo "Warning: you may need to install module-init-tools"; \
-		echo "See http://www.codemonkey.org.uk/docs/post-halloween-2.6.txt";\
-		sleep 1; \
-	fi
+# CONFIG_MIPS_BRCM Begin Broadcom changed code.
+#	@if [ -z "`$(DEPMOD) -V | grep module-init-tools`" ]; then \
+#		echo "Warning: you may need to install module-init-tools"; \
+#		echo "See http://www.codemonkey.org.uk/docs/post-halloween-2.6.txt";\
+#		sleep 1; \
+#	fi
+# CONFIG_MIPS_BRCM End Broadcom changed code.
 	@rm -rf $(MODLIB)/kernel
 	@rm -f $(MODLIB)/source
 	@mkdir -p $(MODLIB)/kernel
-	@ln -s $(srctree) $(MODLIB)/source
-	@if [ ! $(objtree) -ef  $(MODLIB)/build ]; then \
-		rm -f $(MODLIB)/build ; \
-		ln -s $(objtree) $(MODLIB)/build ; \
-	fi
-	@cp -f $(objtree)/modules.order $(MODLIB)/
+# CONFIG_MIPS_BRCM Begin Broadcom changed code	
+#	@ln -s $(srctree) $(MODLIB)/source
+#	@if [ ! $(objtree) -ef  $(MODLIB)/build ]; then \
+#		rm -f $(MODLIB)/build ; \
+#		ln -s $(objtree) $(MODLIB)/build ; \
+#	fi
+#	@cp -f $(objtree)/modules.order $(MODLIB)/
+# CONFIG_MIPS_BRCM End Broadcom changed code.	
 	$(Q)$(MAKE) -f $(srctree)/scripts/Makefile.modinst
 
 # This depmod is only for convenience to give the initial
@@ -1220,7 +1328,8 @@ $(clean-dirs):
 clean: archclean $(clean-dirs)
 	$(call cmd,rmdirs)
 	$(call cmd,rmfiles)
-	@find . $(RCS_FIND_IGNORE) \
+# CONFIG_MIPS_BRCM Broadcom changed code.
+	@find . $(BRCMDRIVERS) $(RCS_FIND_IGNORE) \
 		\( -name '*.[oas]' -o -name '*.ko' -o -name '.*.cmd' \
 		-o -name '.*.d' -o -name '.*.tmp' -o -name '*.mod.c' \
 		-o -name '*.symtypes' -o -name 'modules.order' \
@@ -1402,7 +1511,12 @@ modules: $(module-dirs)
 	$(Q)$(MAKE) -f $(srctree)/scripts/Makefile.modpost
 
 PHONY += modules_install
-modules_install: _emodinst_ _emodinst_post
+# CONFIG_MIPS_BRCM Begin Broadcom changed code	
+# Removing the dependency on depmod as the depmod on RHEL4 seems to be
+# broken.
+#modules_install: _emodinst_ _emodinst_post
+modules_install: _emodinst_
+# CONFIG_MIPS_BRCM End Broadcom changed code	
 
 install-dir := $(if $(INSTALL_MOD_DIR),$(INSTALL_MOD_DIR),extra)
 PHONY += _emodinst_

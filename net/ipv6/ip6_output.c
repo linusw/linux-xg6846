@@ -413,6 +413,35 @@ static inline int ip6_forward_finish(struct sk_buff *skb)
 	return dst_output(skb);
 }
 
+static inline int isULA(const struct in6_addr *addr)
+{
+	__be32 st;
+
+	st = addr->s6_addr32[0];
+
+	/* RFC 4193 */
+	if ((st & htonl(0xFE000000)) == htonl(0xFC000000))
+		return	1;
+	else
+		return	0;
+}
+
+#if defined(CONFIG_MIPS_BRCM)
+static inline int isSpecialAddr(const struct in6_addr *addr)
+{
+	__be32 st;
+
+	st = addr->s6_addr32[0];
+
+	/* RFC 5156 */
+	if (((st & htonl(0xFFFFFFFF)) == htonl(0x20010db8)) ||
+		((st & htonl(0xFFFFFFF0)) == htonl(0x20010010)))
+		return	1;
+	else
+		return	0;
+}
+#endif
+
 int ip6_forward(struct sk_buff *skb)
 {
 	struct dst_entry *dst = skb->dst;
@@ -467,6 +496,12 @@ int ip6_forward(struct sk_buff *skb)
 		return -ETIMEDOUT;
 	}
 
+    /* No traffic with ULA address should be forwarded at WAN intf */
+	if ( isULA(&hdr->daddr) || isULA(&hdr->saddr) )
+		if ((skb->dev->priv_flags & IFF_WANDEV) || 
+			(dst->dev->priv_flags & IFF_WANDEV) )
+			goto drop;
+
 	/* XXX: idev->cnf.proxy_ndp? */
 	if (net->ipv6.devconf_all->proxy_ndp &&
 	    pneigh_lookup(&nd_tbl, net, &hdr->daddr, skb->dev, 0)) {
@@ -517,7 +552,19 @@ int ip6_forward(struct sk_buff *skb)
 
 		/* This check is security critical. */
 		if (addrtype == IPV6_ADDR_ANY ||
+#if defined(CONFIG_MIPS_BRCM)
+			/* 
+			 * RFC 5156: IPv4 mapped addr and IPv4-compatible addr
+			 * should not appear on the Internet. In addition,
+			 * 2001:db8::/32 and 2001:10::/28 should not appear either.
+			 */
+			(addrtype & (IPV6_ADDR_MULTICAST | IPV6_ADDR_LOOPBACK | 
+				IPV6_ADDR_COMPATv4 | IPV6_ADDR_MAPPED | 
+				IPV6_ADDR_SITELOCAL)) ||
+			isSpecialAddr(&hdr->saddr))
+#else
 		    addrtype & (IPV6_ADDR_MULTICAST | IPV6_ADDR_LOOPBACK))
+#endif
 			goto error;
 		if (addrtype & IPV6_ADDR_LINKLOCAL) {
 			icmpv6_send(skb, ICMPV6_DEST_UNREACH,
@@ -548,6 +595,13 @@ int ip6_forward(struct sk_buff *skb)
 	/* Mangling hops number delayed to point after skb COW */
 
 	hdr->hop_limit--;
+
+#if defined(CONFIG_MIPS_BRCM)
+	/* Never forward a packet from a WAN intf to the other WAN intf */
+	if( (skb->dev) && (dst->dev) && 
+		((skb->dev->priv_flags & dst->dev->priv_flags) & IFF_WANDEV) )
+		goto drop;
+#endif
 
 	IP6_INC_STATS_BH(net, ip6_dst_idev(dst), IPSTATS_MIB_OUTFORWDATAGRAMS);
 	return NF_HOOK(PF_INET6, NF_INET_FORWARD, skb, skb->dev, dst->dev,
@@ -1235,6 +1289,18 @@ int ip6_append_data(struct sock *sk, int getfrag(void *from, char *to,
 	 */
 
 	inet->cork.length += length;
+
+#if defined(CONFIG_MIPS_BRCM)
+	if (((length >(mtu - fragheaderlen)) && (sk->sk_protocol == IPPROTO_UDP)) &&
+	    (rt->u.dst.dev->features & NETIF_F_UFO)) {
+		err = ip6_ufo_append_data(sk, getfrag, from, length, hh_len,
+					  fragheaderlen, transhdrlen, mtu,
+					  flags);
+		if (err)
+			goto error;
+		return 0;
+	}
+#else
 	if (((length > mtu) && (sk->sk_protocol == IPPROTO_UDP)) &&
 	    (rt->u.dst.dev->features & NETIF_F_UFO)) {
 
@@ -1245,6 +1311,7 @@ int ip6_append_data(struct sock *sk, int getfrag(void *from, char *to,
 			goto error;
 		return 0;
 	}
+#endif
 
 	if ((skb = skb_peek_tail(&sk->sk_write_queue)) == NULL)
 		goto alloc_new_skb;

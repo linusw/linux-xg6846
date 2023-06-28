@@ -54,7 +54,7 @@ struct tcphdr {
 	__be16	window;
 	__sum16	check;
 	__be16	urg_ptr;
-};
+} LINUX_NET_PACKED;
 
 /*
  *	The union cast uses a gcc extension to avoid aliasing problems
@@ -64,7 +64,7 @@ struct tcphdr {
 union tcp_word_hdr { 
 	struct tcphdr hdr;
 	__be32 		  words[5];
-}; 
+} LINUX_NET_PACKED;
 
 #define tcp_flag_word(tp) ( ((union tcp_word_hdr *)(tp))->words [3]) 
 

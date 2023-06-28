@@ -286,7 +286,24 @@ int smp_call_function_single(int cpu, void (*func) (void *info), void *info,
 	this_cpu = get_cpu();
 
 	/* Can deadlock when called with interrupts disabled */
-	WARN_ON_ONCE(irqs_disabled() && !oops_in_progress);
+	WARN_ON_ONCE(irqs_disabled() && !oops_in_progress
+#ifdef CONFIG_MIPS_BRCM
+	/*
+	 * There is a tiny chance that some thread has locked the per-cpu
+	 * csd_data locked but has not called generic_exec_single yet,
+	 * then we come in on an interrupt and also try to lock it, but it
+	 * is already locked.  Hence the warning about deadlock.  The original
+	 * sysrq code played by the rules and deferred the calling of this
+	 * function to a workqueue, which can sleep and allow for the original
+	 * lock holder to complete.  But we want to force stack dump in the
+	 * other cpu from interrupt context instead of from workqueue because
+	 * the bottom half/scheduling on this CPU may be disabled due to
+	 * buggy software.  So pass in a magic cookie in the info variable to
+	 * bypass the warning.
+	 */
+	             && (info != (void *) 0xeeee)
+#endif
+	            );
 
 	if (cpu == this_cpu) {
 		local_irq_save(flags);

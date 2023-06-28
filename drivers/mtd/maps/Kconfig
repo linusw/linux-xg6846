@@ -81,6 +81,15 @@ config MTD_PHYSMAP_OF
 	  physically into the CPU's memory. The mapping description here is
 	  taken from OF device tree.
 
+# CONFIG_MIPS_BRCM Begin Broadcom changed code
+config MTD_BCM963XX
+	tristate "Broadcom 963xx ADSL board flash memory support"
+	depends on MIPS_BRCM
+	help
+	  Broadcom 963xx ADSL board flash memory
+# CONFIG_MIPS_BRCM End Broadcom changed code
+
+
 config MTD_PMC_MSP_EVM
 	tristate "CFI Flash device mapped on PMC-Sierra MSP"
 	depends on PMC_MSP && MTD_CFI

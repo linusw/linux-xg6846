@@ -250,6 +250,7 @@ EXPORT_SYMBOL(disable_irq);
 
 void __enable_irq(struct irq_desc *desc, unsigned int irq, bool resume)
 {
+
 	if (resume)
 		desc->status &= ~IRQ_SUSPENDED;
 
@@ -890,7 +891,7 @@ int request_threaded_irq(unsigned int irq, irq_handler_t handler,
 		  "IRQ %d/%s: IRQF_DISABLED is not guaranteed on shared IRQs\n",
 			irq, devname);
 	}
-
+	
 #ifdef CONFIG_LOCKDEP
 	/*
 	 * Lockdep wants atomic interrupt handlers:

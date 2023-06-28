@@ -862,7 +862,15 @@ unsigned int sysctl_sched_shares_thresh = 4;
  * period over which we measure -rt task cpu usage in us.
  * default: 1s
  */
+#if defined(CONFIG_MIPS_BRCM) && defined(CONFIG_PREEMPT_SOFTIRQS)
+#ifndef CONFIG_BCM_SCHED_RT_PERIOD
 unsigned int sysctl_sched_rt_period = 1000000;
+#else
+unsigned int sysctl_sched_rt_period = CONFIG_BCM_SCHED_RT_PERIOD;
+#endif
+#else
+unsigned int sysctl_sched_rt_period = 1000000;
+#endif
 
 static __read_mostly int scheduler_running;
 
@@ -870,7 +878,16 @@ static __read_mostly int scheduler_running;
  * part of the period that we allow rt tasks to run in us.
  * default: 0.95s
  */
+#if defined(CONFIG_MIPS_BRCM) && defined(CONFIG_PREEMPT_SOFTIRQS)
+/* RT task takes 100% of time */
+#ifndef CONFIG_BCM_SCHED_RT_RUNTIME
+int sysctl_sched_rt_runtime = 1000000;
+#else
+int sysctl_sched_rt_runtime = CONFIG_BCM_SCHED_RT_RUNTIME;
+#endif
+#else
 int sysctl_sched_rt_runtime = 950000;
+#endif
 
 static inline u64 global_rt_period(void)
 {
@@ -1791,9 +1808,9 @@ static void dequeue_task(struct rq *rq, struct task_struct *p, int sleep)
 {
 	if (sleep) {
 		if (p->se.last_wakeup) {
-			update_avg(&p->se.avg_overlap,
-				p->se.sum_exec_runtime - p->se.last_wakeup);
-			p->se.last_wakeup = 0;
+		update_avg(&p->se.avg_overlap,
+			   p->se.sum_exec_runtime - p->se.last_wakeup);
+		p->se.last_wakeup = 0;
 		} else {
 			update_avg(&p->se.avg_wakeup,
 				sysctl_sched_wakeup_granularity);
@@ -3045,7 +3062,7 @@ int can_migrate_task(struct task_struct *p, struct rq *rq, int this_cpu,
 
 	tsk_cache_hot = task_hot(p, rq->clock, sd);
 	if (!tsk_cache_hot ||
-		sd->nr_balance_failed > sd->cache_nice_tries) {
+			sd->nr_balance_failed > sd->cache_nice_tries) {
 #ifdef CONFIG_SCHEDSTATS
 		if (tsk_cache_hot) {
 			schedstat_inc(sd, lb_hot_gained[idle]);
@@ -3454,83 +3471,83 @@ static inline void update_sg_lb_stats(struct sched_group *group, int this_cpu,
 			int *balance, struct sg_lb_stats *sgs)
 {
 	unsigned long load, max_cpu_load, min_cpu_load;
-	int i;
-	unsigned int balance_cpu = -1, first_idle_cpu = 0;
-	unsigned long sum_avg_load_per_task;
-	unsigned long avg_load_per_task;
+		int i;
+		unsigned int balance_cpu = -1, first_idle_cpu = 0;
+		unsigned long sum_avg_load_per_task;
+		unsigned long avg_load_per_task;
 
-	if (local_group)
+		if (local_group)
 		balance_cpu = group_first_cpu(group);
 
-	/* Tally up the load of all CPUs in the group */
-	sum_avg_load_per_task = avg_load_per_task = 0;
-	max_cpu_load = 0;
-	min_cpu_load = ~0UL;
+		/* Tally up the load of all CPUs in the group */
+		sum_avg_load_per_task = avg_load_per_task = 0;
+		max_cpu_load = 0;
+		min_cpu_load = ~0UL;
 
-	for_each_cpu_and(i, sched_group_cpus(group), cpus) {
-		struct rq *rq = cpu_rq(i);
+		for_each_cpu_and(i, sched_group_cpus(group), cpus) {
+			struct rq *rq = cpu_rq(i);
 
-		if (*sd_idle && rq->nr_running)
-			*sd_idle = 0;
+			if (*sd_idle && rq->nr_running)
+				*sd_idle = 0;
 
-		/* Bias balancing toward cpus of our domain */
-		if (local_group) {
-			if (idle_cpu(i) && !first_idle_cpu) {
-				first_idle_cpu = 1;
-				balance_cpu = i;
+			/* Bias balancing toward cpus of our domain */
+			if (local_group) {
+				if (idle_cpu(i) && !first_idle_cpu) {
+					first_idle_cpu = 1;
+					balance_cpu = i;
+				}
+
+				load = target_load(i, load_idx);
+			} else {
+				load = source_load(i, load_idx);
+				if (load > max_cpu_load)
+					max_cpu_load = load;
+				if (min_cpu_load > load)
+					min_cpu_load = load;
 			}
-
-			load = target_load(i, load_idx);
-		} else {
-			load = source_load(i, load_idx);
-			if (load > max_cpu_load)
-				max_cpu_load = load;
-			if (min_cpu_load > load)
-				min_cpu_load = load;
-		}
 
 		sgs->group_load += load;
 		sgs->sum_nr_running += rq->nr_running;
 		sgs->sum_weighted_load += weighted_cpuload(i);
 
-		sum_avg_load_per_task += cpu_avg_load_per_task(i);
-	}
+			sum_avg_load_per_task += cpu_avg_load_per_task(i);
+		}
 
-	/*
-	 * First idle cpu or the first cpu(busiest) in this sched group
-	 * is eligible for doing load balancing at this and above
-	 * domains. In the newly idle case, we will allow all the cpu's
-	 * to do the newly idle load balance.
-	 */
-	if (idle != CPU_NEWLY_IDLE && local_group &&
-	    balance_cpu != this_cpu && balance) {
-		*balance = 0;
+		/*
+		 * First idle cpu or the first cpu(busiest) in this sched group
+		 * is eligible for doing load balancing at this and above
+		 * domains. In the newly idle case, we will allow all the cpu's
+		 * to do the newly idle load balance.
+		 */
+		if (idle != CPU_NEWLY_IDLE && local_group &&
+		    balance_cpu != this_cpu && balance) {
+			*balance = 0;
 		return;
-	}
+		}
 
-	/* Adjust by relative CPU power of the group */
+		/* Adjust by relative CPU power of the group */
 	sgs->avg_load = sg_div_cpu_power(group,
 			sgs->group_load * SCHED_LOAD_SCALE);
 
 
-	/*
-	 * Consider the group unbalanced when the imbalance is larger
-	 * than the average weight of two tasks.
-	 *
-	 * APZ: with cgroup the avg task weight can vary wildly and
-	 *      might not be a suitable number - should we keep a
-	 *      normalized nr_running number somewhere that negates
-	 *      the hierarchy?
-	 */
-	avg_load_per_task = sg_div_cpu_power(group,
-			sum_avg_load_per_task * SCHED_LOAD_SCALE);
+		/*
+		 * Consider the group unbalanced when the imbalance is larger
+		 * than the average weight of two tasks.
+		 *
+		 * APZ: with cgroup the avg task weight can vary wildly and
+		 *      might not be a suitable number - should we keep a
+		 *      normalized nr_running number somewhere that negates
+		 *      the hierarchy?
+		 */
+		avg_load_per_task = sg_div_cpu_power(group,
+				sum_avg_load_per_task * SCHED_LOAD_SCALE);
 
-	if ((max_cpu_load - min_cpu_load) > 2*avg_load_per_task)
+		if ((max_cpu_load - min_cpu_load) > 2*avg_load_per_task)
 		sgs->group_imb = 1;
 
 	sgs->group_capacity = group->__cpu_power / SCHED_LOAD_SCALE;
 
-}
+		}
 
 /**
  * update_sd_lb_stats - Update sched_group's statistics for load balancing.
@@ -3541,7 +3558,7 @@ static inline void update_sg_lb_stats(struct sched_group *group, int this_cpu,
  * @cpus: Set of cpus considered for load balancing.
  * @balance: Should we balance.
  * @sds: variable to hold the statistics for this sched_domain.
- */
+		 */
 static inline void update_sd_lb_stats(struct sched_domain *sd, int this_cpu,
 			enum cpu_idle_type idle, int *sd_idle,
 			const struct cpumask *cpus, int *balance,
@@ -3731,7 +3748,7 @@ find_busiest_group(struct sched_domain *sd, int this_cpu,
 
 	memset(&sds, 0, sizeof(sds));
 
-	/*
+		/*
 	 * Compute the various statistics relavent for load balancing at
 	 * this level.
 	 */
@@ -3747,7 +3764,7 @@ find_busiest_group(struct sched_domain *sd, int this_cpu,
 	 *    sched_domain.
 	 * 5) The imbalance is within the specified limit.
 	 * 6) Any rebalance would lead to ping-pong
-	 */
+		 */
 	if (balance && !(*balance))
 		goto ret;
 
@@ -4831,7 +4848,7 @@ void scheduler_tick(void)
 	int cpu = smp_processor_id();
 	struct rq *rq = cpu_rq(cpu);
 	struct task_struct *curr = rq->curr;
-
+	
 	sched_clock_tick();
 
 	spin_lock(&rq->lock);
@@ -5030,6 +5047,8 @@ need_resched_nonpreemptible:
 
 	spin_lock_irq(&rq->lock);
 	update_rq_clock(rq);
+	
+	
 	clear_tsk_need_resched(prev);
 
 	if (prev->state && !(preempt_count() & PREEMPT_ACTIVE)) {
@@ -5058,6 +5077,7 @@ need_resched_nonpreemptible:
 		rq->curr = next;
 		++*switch_count;
 
+
 		context_switch(rq, prev, next); /* unlocks the rq */
 		/*
 		 * the context switch might have flipped the stack from under
@@ -5074,6 +5094,7 @@ need_resched_nonpreemptible:
 
 asmlinkage void __sched schedule(void)
 {
+
 need_resched:
 	preempt_disable();
 	__schedule();
@@ -5930,12 +5951,21 @@ recheck:
  *
  * NOTE that the task may be already dead.
  */
+
+
 int sched_setscheduler(struct task_struct *p, int policy,
 		       struct sched_param *param)
 {
 	return __sched_setscheduler(p, policy, param, true);
 }
 EXPORT_SYMBOL_GPL(sched_setscheduler);
+
+int sched_setscheduler_export(struct task_struct *p, int policy,
+		       struct sched_param *param)
+{
+	return __sched_setscheduler(p, policy, param, true);
+}
+EXPORT_SYMBOL(sched_setscheduler_export); 
 
 /**
  * sched_setscheduler_nocheck - change the scheduling policy and/or RT priority of a thread from kernelspace.
@@ -6316,6 +6346,25 @@ int __sched cond_resched_softirq(void)
 }
 EXPORT_SYMBOL(cond_resched_softirq);
 
+/*
+ * Voluntarily preempt a softirq context (possible with softirq threading):
+ */
+int __sched cond_resched_softirq_context(void)
+{
+	WARN_ON_ONCE(!in_softirq());
+
+	if (softirq_need_resched() && system_state == SYSTEM_RUNNING) {
+		raw_local_irq_disable();
+		_local_bh_enable();
+		raw_local_irq_enable();
+		__cond_resched();
+		local_bh_disable();
+		return 1;
+	}
+	return 0;
+}
+EXPORT_SYMBOL(cond_resched_softirq_context);
+
 /**
  * yield - yield the current processor to other threads.
  *
@@ -6494,6 +6543,30 @@ void sched_show_task(struct task_struct *p)
 		task_pid_nr(p), task_pid_nr(p->real_parent));
 
 	show_stack(p, NULL);
+#ifdef CONFIG_MIPS_BRCM
+	{
+		// Also show heap and stack size, which are common problem areas
+		// This code stolen from show_map_vma()
+		struct mm_struct *mm = p->mm;
+		struct vm_area_struct *vma;
+
+		if (mm) {
+			vma = mm->mmap;
+			while (vma != NULL) {
+				if (vma->vm_start <= mm->start_brk &&
+				    vma->vm_end >= mm->brk)
+					printk("[heap]=%luKB\n",
+					       (vma->vm_end - vma->vm_start)>>10);
+				else if (vma->vm_start <= mm->start_stack &&
+				         vma->vm_end >= mm->start_stack)
+					printk("[stack]=%luKB\n",
+					       (vma->vm_end - vma->vm_start)>>10);
+				vma = vma->vm_next;
+			}
+		}
+		printk("\n=====================================\n\n\n");
+	}
+#endif
 }
 
 void show_state_filter(unsigned long state_filter)
@@ -6548,6 +6621,7 @@ void __cpuinit init_idle(struct task_struct *idle, int cpu)
 {
 	struct rq *rq = cpu_rq(cpu);
 	unsigned long flags;
+
 
 	spin_lock_irqsave(&rq->lock, flags);
 

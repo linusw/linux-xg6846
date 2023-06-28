@@ -531,11 +531,19 @@ static inline void local_r4k_flush_data_cache_page(void * addr)
 
 static void r4k_flush_data_cache_page(unsigned long addr)
 {
+#if defined(CONFIG_MIPS_BRCM) && defined(CONFIG_BRCM_DCACHE_SHARED)
+
+	local_r4k_flush_data_cache_page((void *) addr);
+
+#else
+
 	if (in_atomic())
 		local_r4k_flush_data_cache_page((void *)addr);
 	else
 		r4k_on_each_cpu(local_r4k_flush_data_cache_page, (void *) addr,
 			        1);
+
+#endif
 }
 
 struct flush_icache_range_args {
@@ -1304,6 +1312,9 @@ static void __cpuinit coherency_setup(void)
 	case CPU_R4400PC:
 	case CPU_R4400SC:
 	case CPU_R4400MC:
+#if defined(CONFIG_MIPS_BRCM)
+	case CPU_BMIPS4350:
+#endif
 		clear_c0_config(CONF_CU);
 		break;
 	/*

@@ -29,13 +29,21 @@
 #include <net/netfilter/ipv4/nf_conntrack_ipv4.h>
 #include <net/netfilter/ipv6/nf_conntrack_ipv6.h>
 
+#if defined(CONFIG_MIPS_BRCM)
+#include <linux/blog.h>
+#endif
+
 /* Protects ct->proto.tcp */
 static DEFINE_RWLOCK(tcp_lock);
 
+#if defined(CONFIG_MIPS_BRCM)
+static int nf_ct_tcp_be_liberal __read_mostly = 1;
+#else
 /* "Be conservative in what you do,
-    be liberal in what you accept from others."
-    If it's non-zero, we mark only out of window RST segments as INVALID. */
+	be liberal in what you accept from others."
+	If it's non-zero, we mark only out of window RST segments as INVALID. */
 static int nf_ct_tcp_be_liberal __read_mostly = 0;
+#endif
 
 /* If it is set to zero, we disable picking up already established
    connections. */
@@ -73,16 +81,42 @@ static const char *const tcp_conntrack_names[] = {
 static unsigned int nf_ct_tcp_timeout_max_retrans __read_mostly    =   5 MINS;
 static unsigned int nf_ct_tcp_timeout_unacknowledged __read_mostly =   5 MINS;
 
+#ifdef CONFIG_BRCM
+# define nf_ct_tcp_timeout_established  blog_nat_tcp_def_idle_timeout
+static unsigned int nf_ct_tcp_timeout_syn_sent __read_mostly =      2 MINS;
+static unsigned int nf_ct_tcp_timeout_syn_recv __read_mostly =     60 SECS;
+static unsigned int nf_ct_tcp_timeout_fin_wait __read_mostly =      2 MINS;
+static unsigned int nf_ct_tcp_timeout_close_wait __read_mostly =   60 SECS;
+static unsigned int nf_ct_tcp_timeout_last_ack __read_mostly =     30 SECS;
+static unsigned int nf_ct_tcp_timeout_time_wait __read_mostly =     2 MINS;
+static unsigned int nf_ct_tcp_timeout_close __read_mostly =        10 SECS;
+
+#define tcp_timeouts *tcp_timeouts_p
 static unsigned int tcp_timeouts[TCP_CONNTRACK_MAX] __read_mostly = {
-	[TCP_CONNTRACK_SYN_SENT]	= 2 MINS,
-	[TCP_CONNTRACK_SYN_RECV]	= 60 SECS,
-	[TCP_CONNTRACK_ESTABLISHED]	= 5 DAYS,
-	[TCP_CONNTRACK_FIN_WAIT]	= 2 MINS,
-	[TCP_CONNTRACK_CLOSE_WAIT]	= 60 SECS,
-	[TCP_CONNTRACK_LAST_ACK]	= 30 SECS,
-	[TCP_CONNTRACK_TIME_WAIT]	= 2 MINS,
-	[TCP_CONNTRACK_CLOSE]		= 10 SECS,
+	NULL,								/* TCP_CONNTRACK_NONE */
+	&nf_ct_tcp_timeout_syn_sent,		/* TCP_CONNTRACK_SYN_SENT, */
+	&nf_ct_tcp_timeout_syn_recv,		/* TCP_CONNTRACK_SYN_RECV, */
+	&nf_ct_tcp_timeout_established,		/* TCP_CONNTRACK_ESTABLISHED, */
+	&nf_ct_tcp_timeout_fin_wait,		/* TCP_CONNTRACK_FIN_WAIT, */
+	&nf_ct_tcp_timeout_close_wait,		/* TCP_CONNTRACK_CLOSE_WAIT, */
+	&nf_ct_tcp_timeout_last_ack,		/* TCP_CONNTRACK_LAST_ACK, */
+	&nf_ct_tcp_timeout_time_wait,		/* TCP_CONNTRACK_TIME_WAIT, */
+	&nf_ct_tcp_timeout_close,			/* TCP_CONNTRACK_CLOSE, */
+	NULL,								/* TCP_CONNTRACK_LISTEN */
 };
+
+#else
+static unsigned int tcp_timeouts[TCP_CONNTRACK_MAX] __read_mostly = {
+    [TCP_CONNTRACK_SYN_SENT]    = 2 MINS,
+    [TCP_CONNTRACK_SYN_RECV]    = 60 SECS,
+    [TCP_CONNTRACK_ESTABLISHED] = 5 DAYS,
+    [TCP_CONNTRACK_FIN_WAIT]    = 2 MINS,
+    [TCP_CONNTRACK_CLOSE_WAIT]  = 60 SECS,
+    [TCP_CONNTRACK_LAST_ACK]    = 30 SECS,
+    [TCP_CONNTRACK_TIME_WAIT]   = 2 MINS,
+    [TCP_CONNTRACK_CLOSE]       = 10 SECS,
+};
+#endif
 
 #define sNO TCP_CONNTRACK_NONE
 #define sSS TCP_CONNTRACK_SYN_SENT
@@ -977,6 +1011,33 @@ static int tcp_packet(struct nf_conn *ct,
 		 old_state, new_state);
 
 	ct->proto.tcp.state = new_state;
+
+#if defined(CONFIG_MIPS_BRCM) && defined(CONFIG_BLOG)
+
+	if( th->fin )       /* Abort and make this conntrack not BLOG eligible */
+	{
+		if ( (ct->blog_key[IP_CT_DIR_ORIGINAL] != BLOG_KEY_NONE) ||
+			 (ct->blog_key[IP_CT_DIR_REPLY] != BLOG_KEY_NONE) )
+		{
+			blog_notify(DESTROY_FLOWTRACK, (void*)ct,
+						(uint32_t)ct->blog_key[IP_CT_DIR_ORIGINAL],
+						(uint32_t)ct->blog_key[IP_CT_DIR_REPLY]);
+
+			/* Safe: In case blog client does not set key to 0 explicilty */
+			ct->blog_key[IP_CT_DIR_ORIGINAL] = BLOG_KEY_NONE;
+			ct->blog_key[IP_CT_DIR_REPLY]    = BLOG_KEY_NONE;
+		}
+
+		clear_bit(IPS_BLOG_BIT, &ct->status);
+
+	}
+	if ( ct->proto.tcp.state !=  TCP_CONNTRACK_ESTABLISHED )
+	{
+		blog_skip((struct sk_buff *)skb); /* abort blogging this packet */
+	}
+
+#endif
+
 	if (old_state != new_state
 	    && new_state == TCP_CONNTRACK_FIN_WAIT)
 		ct->proto.tcp.seen[dir].flags |= IP_CT_TCP_FLAG_CLOSE_INIT;
@@ -1015,6 +1076,15 @@ static int tcp_packet(struct nf_conn *ct,
 		set_bit(IPS_ASSURED_BIT, &ct->status);
 		nf_conntrack_event_cache(IPCT_STATUS, ct);
 	}
+#ifdef CONFIG_MIPS_BRCM
+        if (new_state == TCP_CONNTRACK_ESTABLISHED) {
+                if (ct->derived_timeout == 0xFFFFFFFF){
+                        timeout = 0xFFFFFFFF - jiffies;
+                } else if(ct->derived_timeout > 0) {
+                        timeout = ct->derived_timeout;
+                }
+        }
+#endif
 	nf_ct_refresh_acct(ct, ctinfo, skb, timeout);
 
 	return NF_ACCEPT;

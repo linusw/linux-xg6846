@@ -33,6 +33,9 @@ MODULE_ALIAS_NFCT_HELPER("ftp");
 
 /* This is slow, but it's simple. --RR */
 static char *ftp_buffer;
+#ifdef CONFIG_MIPS_BRCM
+static char *ftp_big_buffer = NULL;
+#endif /* CONFIG_MIPS_BRCM */
 
 static DEFINE_SPINLOCK(nf_ftp_lock);
 
@@ -355,7 +358,7 @@ static int help(struct sk_buff *skb,
 	const struct tcphdr *th;
 	struct tcphdr _tcph;
 	const char *fb_ptr;
-	int ret;
+	int ret = NF_ACCEPT;
 	u32 seq;
 	int dir = CTINFO2DIR(ctinfo);
 	unsigned int uninitialized_var(matchlen), uninitialized_var(matchoff);
@@ -388,6 +391,17 @@ static int help(struct sk_buff *skb,
 	datalen = skb->len - dataoff;
 
 	spin_lock_bh(&nf_ftp_lock);
+#ifdef CONFIG_MIPS_BRCM
+	/* In worst case, the packet size will increase by 20 bytes after
+	 * NAT modification */
+	if (datalen > NF_ALG_BUFFER_SIZE - 20) {
+		ftp_big_buffer = kmalloc(datalen + 20, GFP_ATOMIC);
+		if (!ftp_big_buffer)
+			goto out;
+		fb_ptr = skb_header_pointer(skb, dataoff, datalen,
+					    ftp_big_buffer);
+	} else
+#endif /* CONFIG_MIPS_BRCM */
 	fb_ptr = skb_header_pointer(skb, dataoff, datalen, ftp_buffer);
 	BUG_ON(fb_ptr == NULL);
 
@@ -508,6 +522,12 @@ out_update_nl:
 	if (ends_in_nl)
 		update_nl_seq(ct, seq, ct_ftp_info, dir, skb);
  out:
+#ifdef CONFIG_MIPS_BRCM
+ 	if (ftp_big_buffer) {
+		kfree(ftp_big_buffer);
+		ftp_big_buffer = NULL;
+	}
+#endif /* CONFIG_MIPS_BRCM */
 	spin_unlock_bh(&nf_ftp_lock);
 	return ret;
 }
@@ -544,7 +564,11 @@ static int __init nf_conntrack_ftp_init(void)
 	int i, j = -1, ret = 0;
 	char *tmpname;
 
+#ifdef CONFIG_MIPS_BRCM
+	ftp_buffer = kmalloc(NF_ALG_BUFFER_SIZE, GFP_KERNEL);
+#else /* CONFIG_MIPS_BRCM */
 	ftp_buffer = kmalloc(65536, GFP_KERNEL);
+#endif /* CONFIG_MIPS_BRCM */
 	if (!ftp_buffer)
 		return -ENOMEM;
 

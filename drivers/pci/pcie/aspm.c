@@ -69,11 +69,15 @@ static LIST_HEAD(link_list);
 #define POLICY_DEFAULT 0	/* BIOS default setting */
 #define POLICY_PERFORMANCE 1	/* high performance */
 #define POLICY_POWERSAVE 2	/* high power saving */
+#define POLICY_L0SPOWERSAVE 3	/* Only do L0S */
+#define POLICY_L1POWERSAVE 4	/* Typically same savings as L1+L0s */
 static int aspm_policy;
 static const char *policy_str[] = {
 	[POLICY_DEFAULT] = "default",
 	[POLICY_PERFORMANCE] = "performance",
-	[POLICY_POWERSAVE] = "powersave"
+	[POLICY_POWERSAVE] = "powersave",
+	[POLICY_L0SPOWERSAVE] = "l0s_powersave",
+	[POLICY_L1POWERSAVE] = "l1_powersave",
 };
 
 #define LINK_RETRAIN_TIMEOUT HZ
@@ -89,6 +93,12 @@ static int policy_to_aspm_state(struct pci_dev *pdev)
 	case POLICY_POWERSAVE:
 		/* Enable ASPM L0s/L1 */
 		return PCIE_LINK_STATE_L0S|PCIE_LINK_STATE_L1;
+	case POLICY_L0SPOWERSAVE:
+		/* Enable ASPM L0s */
+		return PCIE_LINK_STATE_L0S;
+	case POLICY_L1POWERSAVE:
+		/* Enable ASPM L1 */
+		return PCIE_LINK_STATE_L1;
 	case POLICY_DEFAULT:
 		return link_state->bios_aspm_state;
 	}
@@ -104,6 +114,8 @@ static int policy_to_clkpm_state(struct pci_dev *pdev)
 		/* Disable ASPM and Clock PM */
 		return 0;
 	case POLICY_POWERSAVE:
+	case POLICY_L0SPOWERSAVE:
+	case POLICY_L1POWERSAVE:
 		/* Disable Clock PM */
 		return 1;
 	case POLICY_DEFAULT:
@@ -315,13 +327,16 @@ static void pcie_aspm_get_cap_device(struct pci_dev *pdev, u32 *state,
 	pci_read_config_dword(pdev, pos + PCI_EXP_LNKCAP, &reg32);
 	*state = (reg32 & PCI_EXP_LNKCAP_ASPMS) >> 10;
 	if (*state != PCIE_LINK_STATE_L0S &&
+		*state != PCIE_LINK_STATE_L1 &&
 		*state != (PCIE_LINK_STATE_L1|PCIE_LINK_STATE_L0S))
 		*state = 0;
 	if (*state == 0)
 		return;
 
-	latency = (reg32 & PCI_EXP_LNKCAP_L0SEL) >> 12;
-	*l0s = calc_L0S_latency(latency, 0);
+	if (*state & PCIE_LINK_STATE_L0S) {
+		latency = (reg32 & PCI_EXP_LNKCAP_L0SEL) >> 12;
+		*l0s = calc_L0S_latency(latency, 0);
+	}
 	if (*state & PCIE_LINK_STATE_L1) {
 		latency = (reg32 & PCI_EXP_LNKCAP_L1EL) >> 15;
 		*l1 = calc_L1_latency(latency, 0);
@@ -368,9 +383,11 @@ static void pcie_aspm_cap_init(struct pci_dev *pdev)
 
 		pos = pci_find_capability(child_dev, PCI_CAP_ID_EXP);
 		pci_read_config_dword(child_dev, pos + PCI_EXP_DEVCAP, &reg32);
-		latency = (reg32 & PCI_EXP_DEVCAP_L0S) >> 6;
-		latency = calc_L0S_latency(latency, 1);
-		ep_state->l0s_acceptable_latency = latency;
+		if (link_state->support_state & PCIE_LINK_STATE_L0S) {
+			latency = (reg32 & PCI_EXP_DEVCAP_L0S) >> 6;
+			latency = calc_L0S_latency(latency, 1);
+			ep_state->l0s_acceptable_latency = latency;
+		}
 		if (link_state->support_state & PCIE_LINK_STATE_L1) {
 			latency = (reg32 & PCI_EXP_DEVCAP_L1) >> 9;
 			latency = calc_L1_latency(latency, 1);

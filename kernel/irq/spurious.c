@@ -28,6 +28,7 @@ static int try_one_irq(int irq, struct irq_desc *desc)
 	struct irqaction *action;
 	int ok = 0, work = 0;
 
+
 	spin_lock(&desc->lock);
 	/* Already running on another processor */
 	if (desc->status & IRQ_INPROGRESS) {
@@ -181,6 +182,7 @@ static void
 report_bad_irq(unsigned int irq, struct irq_desc *desc, irqreturn_t action_ret)
 {
 	static int count = 100;
+
 
 	if (count > 0) {
 		count--;

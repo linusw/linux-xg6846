@@ -53,6 +53,10 @@
 #include <net/net_namespace.h>
 #include <net/netns/generic.h>
 
+#if defined(CONFIG_MIPS_BRCM)
+#include <linux/blog.h>
+#endif
+
 #define PPP_VERSION	"2.4.2"
 
 /*
@@ -69,6 +73,12 @@
 #define MPHDRLEN	6	/* multilink protocol header length */
 #define MPHDRLEN_SSN	4	/* ditto with short sequence numbers */
 #define MIN_FRAG_SIZE	64
+
+#if defined(CONFIG_MIPS_BRCM)
+#define FIELD0    4        /* ppp device number ppp0, ppp1, the third digit (max 16) */
+#define FIELD1    8        /* if 0, default mode, 1 vlan mux, 2 msc */    
+#define FIELD2    19       /* if FILED1 is 0, add no extension, 1 add vlan id, 2 add conId for msc */
+#endif
 
 /*
  * An instance of /dev/ppp can be associated with either a ppp
@@ -122,6 +132,11 @@ struct ppp {
 	unsigned long	last_recv;	/* jiffies when last pkt rcvd a0 */
 	struct net_device *dev;		/* network interface device a4 */
 	int		closing;	/* is device closing down? a8 */
+#ifdef CONFIG_BLOG
+	BlogStats_t bstats; /* stats when the blog promiscuous layer has consumed packets */
+	struct net_device_stats cstats; /* Cummulative Device stats (rx-bytes, tx-pkts, etc...) */
+#endif
+
 #ifdef CONFIG_PPP_MULTILINK
 	int		nxchan;		/* next channel to send something on */
 	u32		nxseq;		/* next sequence number to send */
@@ -189,11 +204,11 @@ struct ppp_net {
 	/* units to ppp mapping */
 	struct idr units_idr;
 
-	/*
+/*
 	 * all_ppp_mutex protects the units_idr mapping.
 	 * It also ensures that finding a ppp unit in the units_idr
 	 * map and updating its file.refcnt field is atomic.
-	 */
+ */
 	struct mutex all_ppp_mutex;
 
 	/* channels */
@@ -201,11 +216,11 @@ struct ppp_net {
 	struct list_head new_channels;
 	int last_channel_index;
 
-	/*
+/*
 	 * all_channels_lock protects all_channels and
 	 * last_channel_index, and the atomicity of find
 	 * a channel and updating its file.refcnt field.
-	 */
+ */
 	spinlock_t all_channels_lock;
 };
 
@@ -477,6 +492,10 @@ static ssize_t ppp_write(struct file *file, const char __user *buf,
 		goto out;
 	}
 
+#if defined(CONFIG_MIPS_BRCM)	
+	skb->mark = 7;    /* mark with the highest subpriority value */
+#endif	
+
 	skb_queue_tail(&pf->xq, skb);
 
 	switch (pf->kind) {
@@ -564,8 +583,13 @@ static long ppp_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 	struct npioctl npi;
 	int unit, cflags;
 	struct slcompress *vj;
+        char real_dev_name[IFNAMSIZ];
+        struct net_device *real_dev;
 	void __user *argp = (void __user *)arg;
 	int __user *p = argp;
+#if defined(CONFIG_MIPS_BRCM) && defined(CONFIG_BLOG)
+	BlogStats_t bStats;
+#endif
 
 	if (!pf)
 		return ppp_unattached_ioctl(current->nsproxy->net_ns,
@@ -646,6 +670,32 @@ static long ppp_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 		err = 0;
 		break;
 
+	case PPPIOCSREALDEV:
+                copy_from_user(real_dev_name, argp, IFNAMSIZ);
+                real_dev_name[IFNAMSIZ-1] = '\0'; /* NULL terminate, just in case */
+
+                real_dev = dev_get_by_name(&init_net, real_dev_name);
+                if(real_dev == NULL)
+                {
+                    printk(KERN_ERR "PPP: Invalid Real Device Name : %s\n", real_dev_name);
+                    err = -EINVAL;
+                    break;
+                }
+
+                err = netdev_path_add(ppp->dev, real_dev);
+                if(err)
+                {
+                    printk(KERN_ERR "PPP: Failed to add %s to Interface path (%d)",
+                           ppp->dev->name, err);
+                }
+                else
+                {
+                    netdev_path_dump(ppp->dev);
+                }
+
+                dev_put(real_dev);
+		break;
+
 	case PPPIOCSFLAGS:
 		if (get_user(val, p))
 			break;
@@ -689,6 +739,14 @@ static long ppp_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 		break;
 
 	case PPPIOCGIDLE:
+#if defined(CONFIG_MIPS_BRCM) && defined(CONFIG_BLOG)
+		memset(&bStats, 0, sizeof(BlogStats_t));
+		blog_notify(FETCH_NETIF_STATS, (void*)ppp->dev, (uint32_t)&bStats, BLOG_PARAM2_NO_CLEAR);
+		if(bStats.tx_packets)
+			ppp->last_xmit = jiffies;
+		if(bStats.rx_packets)
+			ppp->last_recv = jiffies;
+#endif
 		idle.xmit_idle = (jiffies - ppp->last_xmit) / HZ;
 		idle.recv_idle = (jiffies - ppp->last_recv) / HZ;
 		if (copy_to_user(argp, &idle, sizeof(idle)))
@@ -929,11 +987,11 @@ static int __init ppp_init(void)
 		goto out_net;
 	}
 
-	ppp_class = class_create(THIS_MODULE, "ppp");
-	if (IS_ERR(ppp_class)) {
-		err = PTR_ERR(ppp_class);
-		goto out_chrdev;
-	}
+		ppp_class = class_create(THIS_MODULE, "ppp");
+		if (IS_ERR(ppp_class)) {
+			err = PTR_ERR(ppp_class);
+			goto out_chrdev;
+		}
 
 	/* not a big deal if we fail here :-) */
 	device_create(ppp_class, NULL, MKDEV(PPP_MAJOR, 0), NULL, "ppp");
@@ -996,6 +1054,113 @@ ppp_start_xmit(struct sk_buff *skb, struct net_device *dev)
 	return 0;
 }
 
+#if defined(CONFIG_MIPS_BRCM) && defined(CONFIG_BLOG)
+/* note: BLOG changes for read-only statistic data. */
+
+static inline BlogStats_t *ppp_dev_get_bstats(struct net_device *dev)
+{
+	struct ppp *ppp = netdev_priv(dev);
+
+	return &ppp->bstats;
+}
+static inline struct net_device_stats *ppp_dev_get_cstats(struct net_device *dev)
+{
+	struct ppp *ppp = netdev_priv(dev);
+
+	return &ppp->cstats;
+}
+
+static struct net_device_stats * ppp_dev_collect_stats(struct net_device *dev_p)
+{
+	BlogStats_t bStats;
+	BlogStats_t * bStats_p;
+	struct net_device_stats *dStats_p;
+	struct net_device_stats *cStats_p;
+
+	if ( dev_p == (struct net_device *)NULL )
+		return (struct net_device_stats *)NULL;
+
+	dStats_p = &dev_p->stats;
+	cStats_p = ppp_dev_get_cstats(dev_p);
+	bStats_p = ppp_dev_get_bstats(dev_p);
+
+	memset(&bStats, 0, sizeof(BlogStats_t));
+
+	blog_notify(FETCH_NETIF_STATS, (void*)dev_p,
+				(uint32_t)&bStats, BLOG_PARAM2_NO_CLEAR);
+
+	memcpy( cStats_p, dStats_p, sizeof(struct net_device_stats) );
+	cStats_p->rx_packets += ( bStats.rx_packets + bStats_p->rx_packets );
+	cStats_p->tx_packets += ( bStats.tx_packets + bStats_p->tx_packets );
+
+	/* set byte counts to 0 if the bstat packet counts are non 0 and the
+		octet counts are 0 */
+	if ( ((bStats.rx_bytes + bStats_p->rx_bytes) == 0) &&
+		  ((bStats.rx_packets + bStats_p->rx_packets) > 0) )
+	{
+		cStats_p->rx_bytes = 0;
+	}
+	else
+	{
+		cStats_p->rx_bytes   += ( bStats.rx_bytes   + bStats_p->rx_bytes );
+	}
+
+	if ( ((bStats.tx_bytes + bStats_p->tx_bytes) == 0) &&
+		  ((bStats.tx_packets + bStats_p->tx_packets) > 0) )
+	{
+		cStats_p->tx_bytes = 0;
+	}
+	else
+	{
+		cStats_p->tx_bytes   += ( bStats.tx_bytes   + bStats_p->tx_bytes );
+	}
+	cStats_p->multicast  += ( bStats.multicast  + bStats_p->multicast );
+
+	return cStats_p;
+}
+
+static void ppp_dev_update_stats(struct net_device * dev_p, 
+                                BlogStats_t * blogStats_p)
+{
+	BlogStats_t * bStats_p;
+
+	if ( dev_p == (struct net_device *)NULL )
+		return;
+
+	bStats_p = ppp_dev_get_bstats(dev_p);
+
+	bStats_p->rx_packets += blogStats_p->rx_packets;
+	bStats_p->tx_packets += blogStats_p->tx_packets;
+	bStats_p->rx_bytes   += blogStats_p->rx_bytes;
+	bStats_p->tx_bytes   += blogStats_p->tx_bytes;
+	bStats_p->multicast  += blogStats_p->multicast;
+
+	return;
+}
+
+static void ppp_dev_clear_stats(struct net_device * dev_p)
+{
+	BlogStats_t * bStats_p;
+	struct net_device_stats *dStats_p;
+	struct net_device_stats *cStats_p;
+
+	if ( dev_p == (struct net_device *)NULL )
+		return;
+
+	dStats_p = &dev_p->stats;
+	cStats_p = ppp_dev_get_cstats(dev_p); 
+	bStats_p = ppp_dev_get_bstats(dev_p);
+
+	blog_notify(FETCH_NETIF_STATS, (void*)dev_p, 0, BLOG_PARAM2_DO_CLEAR);
+
+	memset(bStats_p, 0, sizeof(BlogStats_t));
+	memset(dStats_p, 0, sizeof(struct net_device_stats));
+	memset(cStats_p, 0, sizeof(struct net_device_stats));
+
+	return;
+}
+#endif	/* defined(CONFIG_MIPS_BRCM) && defined(CONFIG_BLOG) */
+
 static int
 ppp_net_ioctl(struct net_device *dev, struct ifreq *ifr, int cmd)
 {
@@ -1042,6 +1207,9 @@ ppp_net_ioctl(struct net_device *dev, struct ifreq *ifr, int cmd)
 static const struct net_device_ops ppp_netdev_ops = {
 	.ndo_start_xmit = ppp_start_xmit,
 	.ndo_do_ioctl   = ppp_net_ioctl,
+#ifdef CONFIG_BLOG
+	.ndo_get_stats  = ppp_dev_collect_stats,
+#endif
 };
 
 static void ppp_setup(struct net_device *dev)
@@ -1053,7 +1221,14 @@ static void ppp_setup(struct net_device *dev)
 	dev->tx_queue_len = 3;
 	dev->type = ARPHRD_PPP;
 	dev->flags = IFF_POINTOPOINT | IFF_NOARP | IFF_MULTICAST;
+#ifdef CONFIG_MIPS_BRCM
+    dev->priv_flags = IFF_PPP | IFF_WANDEV;
+#endif
 	dev->features |= NETIF_F_NETNS_LOCAL;
+#ifdef CONFIG_BLOG
+	dev->put_stats = ppp_dev_update_stats;
+	dev->clr_stats = ppp_dev_clear_stats;
+#endif
 }
 
 /*
@@ -1133,6 +1308,56 @@ pad_compress_skb(struct ppp *ppp, struct sk_buff *skb)
 	return new_skb;
 }
 
+#if defined(CONFIG_MIPS_BRCM)
+/*
+brcm_on_demand_filter(...) and ppp_send_frame(...) are protected for SMP+Preempt safety
+by ppp_xmit_lock(ppp) => spin_lock_bh(&(ppp)->wlock) and ppp_xmit_unlock(ppp) =>  spin_unlock_bh(&(ppp)->wlock). 
+*/
+#endif
+
+#if defined(CONFIG_MIPS_BRCM)
+/*
+ * Excluding timestamp for packet generated from ADSL modem
+ * these include WAN-side RIP,dnsprobe
+ */
+static int
+brcm_on_demand_filter(char *data)
+{
+	unsigned short udp_port=0;
+
+#if 0
+	char cmd;
+
+        printk("%02x%02x%02x%02x\n%02x%02x%02x%02x\n",data[2],data[3],data[4],data[5],data[6],data[7],data[8],data[9]);
+        printk("%02x%02x%02x%02x\n%02x%02x%02x%02x\n",data[10],data[11],data[12],data[13],data[14],data[15],data[16],data[17]);
+        printk("%02x%02x%02x%02x\n",data[18],data[19],data[20],data[21]);
+#endif
+
+	if ( data[11] == 0x2 )  /* IGMP */
+		return 0;
+	if ( data[11] == 0x11 ) { /* UDP */
+	   udp_port= (data[24]<< 8) + data[25];
+	   if ( udp_port == 123 ) { /* ntpclient */
+		return 0;
+	   }
+	   if ( udp_port == 53 ) {
+		if ( data[45] == 'r' && data[46] == 'o' && data[47] == 'o' && data[48] =='t')
+		 
+		return 0;
+	   }
+	   else if (udp_port == 520) { /* RIP */
+#if 0
+			cmd = data[30]; // 1=request, 2=reply
+			if ( cmd == 1)
+#endif
+			  return 0;
+	   }
+	}	
+	   
+        return 1;
+}
+#endif
+
 /*
  * Compress and send a frame.
  * The caller should have locked the xmit path,
@@ -1145,6 +1370,15 @@ ppp_send_frame(struct ppp *ppp, struct sk_buff *skb)
 	struct sk_buff *new_skb;
 	int len;
 	unsigned char *cp;
+#if defined(CONFIG_MIPS_BRCM)
+	unsigned char *data;
+	int timestamp = 1;
+
+	if ( proto == PPP_IP) {
+		data = skb->data;
+		timestamp = brcm_on_demand_filter(data);
+	}
+#endif	
 
 	if (proto < 0x8000) {
 #ifdef CONFIG_PPP_FILTER
@@ -1164,13 +1398,23 @@ ppp_send_frame(struct ppp *ppp, struct sk_buff *skb)
 		if (!(ppp->active_filter
 		      && sk_run_filter(skb, ppp->active_filter,
 				       ppp->active_len) == 0))
+#if defined(CONFIG_MIPS_BRCM)
+	       if (timestamp)
+#endif					       
 			ppp->last_xmit = jiffies;
 		skb_pull(skb, 2);
 #else
 		/* for data packets, record the time */
+#if defined(CONFIG_MIPS_BRCM)
+	       if (timestamp)
+#endif			
 		ppp->last_xmit = jiffies;
 #endif /* CONFIG_PPP_FILTER */
 	}
+
+#if defined(CONFIG_MIPS_BRCM) && defined(CONFIG_BLOG)
+	blog_link(IF_DEVICE, blog_ptr(skb), (void*)ppp->dev, DIR_TX, skb->len - 2 );
+#endif
 
 	++ppp->dev->stats.tx_packets;
 	ppp->dev->stats.tx_bytes += skb->len - 2;
@@ -1236,6 +1480,10 @@ ppp_send_frame(struct ppp *ppp, struct sk_buff *skb)
 	if (ppp->flags & SC_LOOP_TRAFFIC) {
 		if (ppp->file.rq.qlen > PPP_MAX_RQLEN)
 			goto drop;
+#if defined(CONFIG_MIPS_BRCM)		
+		if (!timestamp)
+			goto drop;
+#endif		
 		skb_queue_tail(&ppp->file.rq, skb);
 		wake_up_interruptible(&ppp->file.rwait);
 		return;
@@ -1246,7 +1494,7 @@ ppp_send_frame(struct ppp *ppp, struct sk_buff *skb)
 	return;
 
  drop:
-	kfree_skb(skb);
+		kfree_skb(skb);
 	++ppp->dev->stats.tx_errors;
 }
 
@@ -1309,10 +1557,10 @@ ppp_push(struct ppp *ppp)
 static int ppp_mp_explode(struct ppp *ppp, struct sk_buff *skb)
 {
 	int	len, totlen;
-	int	i, bits, hdrlen, mtu;
-	int	flen;
+	int i, bits, hdrlen, mtu;
+	int flen;
 	int	navail,	nfree, nzero;
-	int	nbigger;
+	int nbigger;
 	int	totspeed;
 	int	totfree;
 	unsigned char *p, *q;
@@ -1322,7 +1570,7 @@ static int ppp_mp_explode(struct ppp *ppp, struct sk_buff *skb)
 	struct ppp_channel *chan;
 
 	totspeed = 0; /*total bitrate of the bundle*/
-	nfree =	0;	/* # channels which	have no	packet already queued */
+	nfree = 0;	/* # channels which have no packet already queued */
 	navail = 0;	/* total # of usable channels (not deregistered) */
 	nzero =	0; /* number of	channels with zero speed associated*/
 	totfree	= 0; /*total # of channels available and
@@ -1330,76 +1578,76 @@ static int ppp_mp_explode(struct ppp *ppp, struct sk_buff *skb)
 				  *starting the fragmentation*/
 
 	hdrlen = (ppp->flags & SC_MP_XSHORTSEQ)? MPHDRLEN_SSN: MPHDRLEN;
-	i =	0;
-	list_for_each_entry(pch, &ppp->channels, clist)	{
+	i = 0;
+	list_for_each_entry(pch, &ppp->channels, clist) {
 		navail += pch->avail = (pch->chan != NULL);
 		pch->speed = pch->chan->speed;
-		if (pch->avail)	{
+		if (pch->avail) {
 			if (skb_queue_empty(&pch->file.xq) ||
-				!pch->had_frag)	{
+			    !pch->had_frag) {
 					if (pch->speed == 0)
 						nzero++;
 					else
 						totspeed += pch->speed;
 
-					pch->avail = 2;
-					++nfree;
+				pch->avail = 2;
+				++nfree;
 					++totfree;
-				}
-			if (!pch->had_frag && i	< ppp->nxchan)
-				ppp->nxchan	= i;
+			}
+			if (!pch->had_frag && i < ppp->nxchan)
+				ppp->nxchan = i;
 		}
 		++i;
 	}
 	/*
-	 * Don't start sending this	packet unless at least half	of
-	 * the channels	are	free.  This	gives much better TCP
-	 * performance if we have a	lot	of channels.
+	 * Don't start sending this packet unless at least half of
+	 * the channels are free.  This gives much better TCP
+	 * performance if we have a lot of channels.
 	 */
-	if (nfree == 0 || nfree	< navail / 2)
-		return 0; /* can't take now, leave it in xmit_pending	*/
+	if (nfree == 0 || nfree < navail / 2)
+		return 0;	/* can't take now, leave it in xmit_pending */
 
 	/* Do protocol field compression (XXX this should be optional) */
-	p =	skb->data;
-	len	= skb->len;
+	p = skb->data;
+	len = skb->len;
 	if (*p == 0) {
 		++p;
 		--len;
 	}
 
 	totlen = len;
-	nbigger	= len %	nfree;
+	nbigger = len % nfree;
 
-	/* skip	to the channel after the one we	last used
-	   and start at	that one */
+	/* skip to the channel after the one we last used
+	   and start at that one */
 	list = &ppp->channels;
-	for	(i = 0;	i <	ppp->nxchan; ++i) {
+	for (i = 0; i < ppp->nxchan; ++i) {
 		list = list->next;
-		if (list ==	&ppp->channels)	{
-			i =	0;
+		if (list == &ppp->channels) {
+			i = 0;
 			break;
 		}
 	}
 
-	/* create a	fragment for each channel */
+	/* create a fragment for each channel */
 	bits = B;
 	while (nfree > 0 &&	len	> 0) {
 		list = list->next;
-		if (list ==	&ppp->channels)	{
-			i =	0;
+		if (list == &ppp->channels) {
+			i = 0;
 			continue;
 		}
-		pch	= list_entry(list, struct channel, clist);
+		pch = list_entry(list, struct channel, clist);
 		++i;
 		if (!pch->avail)
 			continue;
 
 		/*
-		 * Skip	this channel if	it has a fragment pending already and
-		 * we haven't given	a fragment to all of the free channels.
+		 * Skip this channel if it has a fragment pending already and
+		 * we haven't given a fragment to all of the free channels.
 		 */
 		if (pch->avail == 1) {
-			if (nfree >	0)
+			if (nfree > 0)
 				continue;
 		} else {
 			pch->avail = 1;
@@ -1408,7 +1656,7 @@ static int ppp_mp_explode(struct ppp *ppp, struct sk_buff *skb)
 		/* check the channel's mtu and whether it is still attached. */
 		spin_lock_bh(&pch->downl);
 		if (pch->chan == NULL) {
-			/* can't use this channel, it's	being deregistered */
+			/* can't use this channel, it's being deregistered */
 			if (pch->speed == 0)
 				nzero--;
 			else
@@ -1419,7 +1667,7 @@ static int ppp_mp_explode(struct ppp *ppp, struct sk_buff *skb)
 			totlen = len;
 			totfree--;
 			nfree--;
-			if (--navail ==	0)
+			if (--navail == 0)
 				break;
 			continue;
 		}
@@ -1466,23 +1714,23 @@ static int ppp_mp_explode(struct ppp *ppp, struct sk_buff *skb)
 			continue;
 		}
 
-		mtu	= pch->chan->mtu + 2 - hdrlen;
-		if (mtu	< 4)
-			mtu	= 4;
+		mtu = pch->chan->mtu + 2 - hdrlen;
+		if (mtu < 4)
+			mtu = 4;
 		if (flen > mtu)
 			flen = mtu;
 		if (flen ==	len)
-			bits |=	E;
-		frag = alloc_skb(flen +	hdrlen + (flen == 0), GFP_ATOMIC);
+			bits |= E;
+		frag = alloc_skb(flen + hdrlen + (flen == 0), GFP_ATOMIC);
 		if (!frag)
 			goto noskb;
-		q =	skb_put(frag, flen + hdrlen);
+		q = skb_put(frag, flen + hdrlen);
 
-		/* make	the	MP header */
+		/* make the MP header */
 		q[0] = PPP_MP >> 8;
 		q[1] = PPP_MP;
 		if (ppp->flags & SC_MP_XSHORTSEQ) {
-			q[2] = bits	+ ((ppp->nxseq >> 8) & 0xf);
+			q[2] = bits + ((ppp->nxseq >> 8) & 0xf);
 			q[3] = ppp->nxseq;
 		} else {
 			q[2] = bits;
@@ -1491,28 +1739,28 @@ static int ppp_mp_explode(struct ppp *ppp, struct sk_buff *skb)
 			q[5] = ppp->nxseq;
 		}
 
-		memcpy(q + hdrlen, p, flen);
+			memcpy(q + hdrlen, p, flen);
 
 		/* try to send it down the channel */
 		chan = pch->chan;
-		if (!skb_queue_empty(&pch->file.xq)	||
-			!chan->ops->start_xmit(chan, frag))
+		if (!skb_queue_empty(&pch->file.xq) ||
+		    !chan->ops->start_xmit(chan, frag))
 			skb_queue_tail(&pch->file.xq, frag);
-		pch->had_frag =	1;
+		pch->had_frag = 1;
 		p += flen;
-		len	-= flen;
+		len -= flen;
 		++ppp->nxseq;
 		bits = 0;
 		spin_unlock_bh(&pch->downl);
 	}
-	ppp->nxchan	= i;
+	ppp->nxchan = i;
 
 	return 1;
 
  noskb:
 	spin_unlock_bh(&pch->downl);
 	if (ppp->debug & 1)
-		printk(KERN_ERR	"PPP: no memory	(fragment)\n");
+		printk(KERN_ERR "PPP: no memory (fragment)\n");
 	++ppp->dev->stats.tx_errors;
 	++ppp->nxseq;
 	return 1;	/* abandon the frame */
@@ -1655,11 +1903,43 @@ ppp_receive_error(struct ppp *ppp)
 		slhc_toss(ppp->vj);
 }
 
+#if defined(CONFIG_MIPS_BRCM)
+/* 
+note: brcm_mcast_filter(...) and ppp_receive_nonmp_frame(...) are protected for SMP+Preempt safety
+by ppp_recv_lock(ppp) => spin_lock_bh(&(ppp)->rlock) and  ppp_recv_unlock(ppp) => spin_unlock_bh(&(ppp)->rlock). 
+*/
+#endif
+
+#if defined(CONFIG_MIPS_BRCM)
+static int
+brcm_mcast_filter(char *data)
+{
+	struct iphdr *encap;
+
+	encap = (struct iphdr *)(data + 2);
+	if ( MULTICAST(encap->daddr)) {
+	   if ( !LOCAL_MCAST(encap->daddr)) { // real mcast data
+		//printk("bcm_mcast_filer: 0x%x \n",encap->daddr);
+		return 1;		 // no timestamp
+	   }
+	   else
+		return 0;
+        }
+	else
+		return 0;
+}
+#endif
+
 static void
 ppp_receive_nonmp_frame(struct ppp *ppp, struct sk_buff *skb)
 {
 	struct sk_buff *ns;
 	int proto, len, npi;
+#if defined(CONFIG_MIPS_BRCM)
+	struct sk_buff *tmp;
+	int timestamp=0;
+	unsigned char *data;
+#endif	
 
 	/*
 	 * Decompress the frame, if compressed.
@@ -1674,6 +1954,13 @@ ppp_receive_nonmp_frame(struct ppp *ppp, struct sk_buff *skb)
 		goto err;
 
 	proto = PPP_PROTO(skb);
+
+#if defined(CONFIG_MIPS_BRCM)
+	if (proto == PPP_IP) {
+		data = skb->data;
+		timestamp = brcm_mcast_filter(data);
+	}
+#endif	
 	switch (proto) {
 	case PPP_VJC_COMP:
 		/* decompress VJ compressed packets */
@@ -1730,6 +2017,10 @@ ppp_receive_nonmp_frame(struct ppp *ppp, struct sk_buff *skb)
 		break;
 	}
 
+#if defined(CONFIG_MIPS_BRCM) && defined(CONFIG_BLOG)
+	blog_link(IF_DEVICE, blog_ptr(skb), (void*)ppp->dev, DIR_RX, skb->len - 2 );
+#endif
+
 	++ppp->dev->stats.rx_packets;
 	ppp->dev->stats.rx_bytes += skb->len - 2;
 
@@ -1746,6 +2037,41 @@ ppp_receive_nonmp_frame(struct ppp *ppp, struct sk_buff *skb)
 
 	} else {
 		/* network protocol frame - give it to the kernel */
+
+#if defined(CONFIG_MIPS_BRCM)
+
+#ifdef CONFIG_PPP_FILTER
+		/* check if the packet passes the pass and active filters */
+		/* the filter instructions are constructed assuming
+		   a four-byte PPP header on each packet */
+		if (skb_headroom(skb) < 2) { 
+		    tmp = alloc_skb(skb->len+2,GFP_ATOMIC); 
+		    skb_reserve(tmp, 2); 
+		    memcpy(skb_put(tmp, skb->len), skb->data, skb->len); 
+		    kfree_skb(skb); 
+		    skb = tmp; 
+	   } 
+		*skb_push(skb, 2) = 0;
+		if (ppp->pass_filter
+		    && sk_run_filter(skb, ppp->pass_filter,
+				     ppp->pass_len) == 0) {
+			if (ppp->debug & 1)
+				printk(KERN_DEBUG "PPP: inbound frame not passed\n");
+			kfree_skb(skb);
+			return;
+		}
+		if (!(ppp->active_filter
+		      && sk_run_filter(skb, ppp->active_filter,
+				       ppp->active_len) == 0))
+	      if (timestamp)
+			   ppp->last_recv = jiffies;
+		skb_pull(skb, 2);
+#else
+		if (timestamp)
+		   ppp->last_recv = jiffies;
+#endif /* CONFIG_PPP_FILTER */
+
+#else  /* original code */
 
 #ifdef CONFIG_PPP_FILTER
 		/* check if the packet passes the pass and active filters */
@@ -1774,6 +2100,8 @@ ppp_receive_nonmp_frame(struct ppp *ppp, struct sk_buff *skb)
 		} else
 #endif /* CONFIG_PPP_FILTER */
 			ppp->last_recv = jiffies;
+
+#endif /* CONFIG_MIPS_BRCM */
 
 		if ((ppp->dev->flags & IFF_UP) == 0
 		    || ppp->npmode[npi] != NPMODE_PASS) {
@@ -2493,12 +2821,23 @@ ppp_get_stats(struct ppp *ppp, struct ppp_stats *st)
 	struct slcompress *vj = ppp->vj;
 
 	memset(st, 0, sizeof(*st));
+#if defined(CONFIG_MIPS_BRCM) && defined(CONFIG_BLOG)
+	ppp_dev_collect_stats(ppp->dev);
+
+	st->p.ppp_ierrors = ppp->dev->stats.rx_errors;
+	st->p.ppp_oerrors = ppp->dev->stats.tx_errors;
+	st->p.ppp_ipackets = ppp->cstats.rx_packets;
+	st->p.ppp_ibytes = ppp->cstats.rx_bytes;
+	st->p.ppp_opackets = ppp->cstats.tx_packets;
+	st->p.ppp_obytes = ppp->cstats.tx_bytes;
+#else
 	st->p.ppp_ipackets = ppp->dev->stats.rx_packets;
 	st->p.ppp_ierrors = ppp->dev->stats.rx_errors;
 	st->p.ppp_ibytes = ppp->dev->stats.rx_bytes;
 	st->p.ppp_opackets = ppp->dev->stats.tx_packets;
 	st->p.ppp_oerrors = ppp->dev->stats.tx_errors;
 	st->p.ppp_obytes = ppp->dev->stats.tx_bytes;
+#endif
 	if (!vj)
 		return;
 	st->vj.vjs_packets = vj->sls_o_compressed + vj->sls_o_uncompressed;
@@ -2516,6 +2855,10 @@ ppp_get_stats(struct ppp *ppp, struct ppp_stats *st)
  * and for initialization.
  */
 
+#if defined(CONFIG_MIPS_BRCM)
+/* note: ppp_create_interface(...) is protected by lock_kernel() and unlock_kernel() in ppp_unattached_ioctl(...). */
+#endif
+
 /*
  * Create a new ppp interface unit.  Fails if it can't allocate memory
  * or if there is already a unit with the requested number.
@@ -2529,6 +2872,9 @@ ppp_create_interface(struct net *net, int unit, int *retp)
 	struct net_device *dev = NULL;
 	int ret = -ENOMEM;
 	int i;
+#if defined(CONFIG_MIPS_BRCM)
+	unsigned num[3]={0,0,0};
+#endif
 
 	dev = alloc_netdev(sizeof(struct ppp), "", ppp_setup);
 	if (!dev)
@@ -2587,6 +2933,44 @@ ppp_create_interface(struct net *net, int unit, int *retp)
 	ppp->file.index = unit;
 	sprintf(dev->name, "ppp%d", unit);
 
+#if defined(CONFIG_MIPS_BRCM)
+   if (unit >= 0)
+   {
+      unsigned u=unit;
+     
+     /* req_name will beused as ifname and  for
+     * num[1] == 0:  default connection mdoe: ppp0, ppp1...
+     * num[1] == 1:  vlanMux mode: ppp0.100, ppp1.200...  
+     * num[1] == 2:  msc (multiple service mode) ppp0_1, ppp1_3...
+     * num[1] == 3:  pppoa0, pppoa1...
+     *
+     */
+      num[0] = u<<(32-(FIELD2+FIELD1+FIELD0))>>(32-FIELD0);
+      num[1] = u<<(32-(FIELD2+FIELD1))>>(32-FIELD1);
+      num[2] = u<<(32-(FIELD2))>>(32-FIELD2);
+      if (num[1] == 0)
+      {
+         sprintf(dev->name, "ppp%d", num[0]);
+      }
+      else if (num[1] == 1) /* vlan mux */
+      {
+         sprintf(dev->name, "ppp%d.%d", num[0], num[2]);
+      }
+      else if (num[1] == 2) /* msc */
+      {
+         sprintf(dev->name, "ppp%d_%d", num[0], num[2]);
+      }
+      else if (num[1] == 3) /* pppoa */
+      {
+         sprintf(dev->name, "pppoa%d", num[0]);
+      }
+   }
+#else
+   sprintf(dev->name, "ppp%d", unit);
+#endif
+
+     //printk(KERN_ERR "PPP_KERN: num0=%d, num1=%d, num2=%d register device %s", num[0], num[1], num[2], dev->name);
+
 	ret = register_netdev(dev);
 	if (ret != 0) {
 		unit_put(&pn->units_idr, unit);
@@ -2631,6 +3015,7 @@ init_ppp_file(struct ppp_file *pf, int kind)
 static void ppp_shutdown_interface(struct ppp *ppp)
 {
 	struct ppp_net *pn;
+        int err;
 
 	pn = ppp_pernet(ppp->ppp_net);
 	mutex_lock(&pn->all_ppp_mutex);
@@ -2638,6 +3023,13 @@ static void ppp_shutdown_interface(struct ppp *ppp)
 	/* This will call dev_close() for us. */
 	ppp_lock(ppp);
 	if (!ppp->closing) {
+                err = netdev_path_remove(ppp->dev);
+                if(err)
+                {
+                    printk(KERN_ERR "PPP: Failed to remove %s from Interface path (%d)",
+                           ppp->dev->name, err);
+                    netdev_path_dump(ppp->dev);
+                }
 		ppp->closing = 1;
 		ppp_unlock(ppp);
 		unregister_netdev(ppp->dev);
@@ -2686,7 +3078,7 @@ static void ppp_destroy_interface(struct ppp *ppp)
 	ppp->active_filter = NULL;
 #endif /* CONFIG_PPP_FILTER */
 
-	kfree_skb(ppp->xmit_pending);
+		kfree_skb(ppp->xmit_pending);
 
 	free_netdev(ppp->dev);
 }

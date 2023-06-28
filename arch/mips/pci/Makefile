@@ -16,6 +16,9 @@ obj-$(CONFIG_PCI_VR41XX)	+= ops-vr41xx.o pci-vr41xx.o
 obj-$(CONFIG_NEC_MARKEINS)	+= ops-emma2rh.o pci-emma2rh.o fixup-emma2rh.o
 obj-$(CONFIG_PCI_TX4927)	+= ops-tx4927.o
 obj-$(CONFIG_BCM47XX)		+= pci-bcm47xx.o
+# CONFIG_MIPS_BRCM Begin Broadcom changed code
+obj-$(CONFIG_BCM_PCI)		+= fixup-bcm63xx.o pci-bcm63xx.o ops-bcm63xx.o
+# CONFIG_MIPS_BRCM End Broadcom changed code
 
 #
 # These are still pretty much in the old state, watch, go blind.
@@ -52,3 +55,9 @@ obj-$(CONFIG_VICTOR_MPC30X)	+= fixup-mpc30x.o
 obj-$(CONFIG_ZAO_CAPCELLA)	+= fixup-capcella.o
 obj-$(CONFIG_WR_PPMC)		+= fixup-wrppmc.o
 obj-$(CONFIG_MIKROTIK_RB532)	+= pci-rc32434.o ops-rc32434.o fixup-rc32434.o
+
+# CONFIG_MIPS_BRCM Begin Broadcom changed code
+ifeq "$(CONFIG_BCM_PCI)" "y"
+EXTRA_CFLAGS += -I$(INC_BRCMDRIVER_PUB_PATH)/$(BRCM_BOARD) -I$(INC_BRCMSHARED_PUB_PATH)/$(BRCM_BOARD)
+endif
+# CONFIG_MIPS_BRCM End Broadcom changed code

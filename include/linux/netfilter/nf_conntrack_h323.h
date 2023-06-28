@@ -12,6 +12,21 @@
 /* This structure exists only once per master */
 struct nf_ct_h323_master {
 
+	/*BRCM: type for how to divide Q.931*/
+	enum{
+		/* tpkt header and payload are wrapped in one packet */
+		DIVTYPE_NORMAL = 0x00,
+		/* tpkt header is in the first packet and payload is the
+		 * next one
+		 */
+		DIVTYPE_TPKTHDR	= 0x01,
+		/* tpkt packet (size maybe is more than several kbytes) is
+		 * seperated into several parts by the tcp protocol. This
+		 * dividing method is different from the second one.
+		 */
+		DIVTYPE_Q931 = 0x02,
+	}div_type[IP_CT_DIR_MAX]; 
+
 	/* Original and NATed Q.931 or H.245 signal ports */
 	__be16 sig_port[IP_CT_DIR_MAX];
 
@@ -29,6 +44,8 @@ struct nf_ct_h323_master {
 
 struct nf_conn;
 
+extern int have_direct_route(union nf_inet_addr *src, union nf_inet_addr *dst,
+			     int family);
 extern int get_h225_addr(struct nf_conn *ct, unsigned char *data,
 			 TransportAddress *taddr,
 			 union nf_inet_addr *addr, __be16 *port);
@@ -36,6 +53,8 @@ extern void nf_conntrack_h245_expect(struct nf_conn *new,
 				     struct nf_conntrack_expect *this);
 extern void nf_conntrack_q931_expect(struct nf_conn *new,
 				     struct nf_conntrack_expect *this);
+extern int (*set_addr_bf_hook)(struct sk_buff **pskb,
+		       	       unsigned char **data, int datalen, int dataoff);
 extern int (*set_h245_addr_hook) (struct sk_buff *skb,
 				  unsigned char **data, int dataoff,
 				  H245_TransportAddress *taddr,

@@ -189,6 +189,9 @@ extern void __xchg_called_with_bad_pointer(void);
 
 static inline unsigned long __xchg(unsigned long x, volatile void * ptr, int size)
 {
+#if defined(CONFIG_MIPS_BRCM) && defined(CONFIG_BRCM_BOUNCE)
+	return __xchg_u32(ptr, x);
+#else
 	switch (size) {
 	case 4:
 		return __xchg_u32(ptr, x);
@@ -197,6 +200,7 @@ static inline unsigned long __xchg(unsigned long x, volatile void * ptr, int siz
 	}
 	__xchg_called_with_bad_pointer();
 	return x;
+#endif	
 }
 
 #define xchg(ptr, x) ((__typeof__(*(ptr)))__xchg((unsigned long)(x), (ptr), sizeof(*(ptr))))

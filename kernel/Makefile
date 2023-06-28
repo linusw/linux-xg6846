@@ -2,6 +2,12 @@
 # Makefile for the linux kernel.
 #
 
+ifdef CONFIG_MIPS_BRCM
+ifdef CONFIG_BRCM_BOUNCE_DATAPATH
+EXTRA_CFLAGS += -O0 -finstrument-functions
+endif
+endif
+
 obj-y     = sched.o fork.o exec_domain.o panic.o printk.o \
 	    cpu.o exit.o itimer.o time.o softirq.o resource.o \
 	    sysctl.o capability.o ptrace.o timer.o user.o \
@@ -21,6 +27,12 @@ CFLAGS_REMOVE_rtmutex-debug.o = -pg
 CFLAGS_REMOVE_cgroup-debug.o = -pg
 CFLAGS_REMOVE_sched_clock.o = -pg
 endif
+
+LINUXINCLUDE += -I$(BUILD_DIR)/shared/broadcom/include/bcm963xx \
+	-I$(BUILD_DIR)/bcmdrivers/opensource/include/bcm963xx \
+	-I$(BUILD_DIR)/shared/opensource/include/bcm963xx 
+
+
 
 obj-$(CONFIG_FREEZER) += freezer.o
 obj-$(CONFIG_PROFILING) += profile.o
@@ -95,6 +107,8 @@ obj-$(CONFIG_FUNCTION_TRACER) += trace/
 obj-$(CONFIG_TRACING) += trace/
 obj-$(CONFIG_SMP) += sched_cpupri.o
 obj-$(CONFIG_SLOW_WORK) += slow-work.o
+obj-$(CONFIG_BCM_LOG) += bcm_log.o
+
 
 ifneq ($(CONFIG_SCHED_OMIT_FRAME_POINTER),y)
 # According to Alan Modra <alan@linuxcare.com.au>, the -fno-omit-frame-pointer is

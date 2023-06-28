@@ -43,6 +43,24 @@
 #define BRCTL_SET_PATH_COST 17
 #define BRCTL_GET_FDB_ENTRIES 18
 
+//#if defined(CONFIG_MIPS_BRCM)
+//required by userspace - cannot use ifdef
+#define BRCTL_ENABLE_SNOOPING        21
+#define BRCTL_ENABLE_PROXY_MODE      22
+
+#define BRCTL_ENABLE_IGMP_RATE_LIMIT 23
+
+#define BRCTL_MLD_ENABLE_SNOOPING    24
+#define BRCTL_MLD_ENABLE_PROXY_MODE  25
+
+#define BRCTL_ADD_FDB_ENTRIES        26
+#define BRCTL_DEL_FDB_ENTRIES        27
+
+#define BRCTL_SET_FLOWS              28
+
+#define BRCTL_SET_UNI_UNI_CTRL       29
+//#endif
+
 #define BR_STATE_DISABLED 0
 #define BR_STATE_LISTENING 1
 #define BR_STATE_LEARNING 2

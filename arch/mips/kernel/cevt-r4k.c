@@ -14,6 +14,10 @@
 #include <asm/time.h>
 #include <asm/cevt-r4k.h>
 
+#if defined(CONFIG_BCM_HOSTMIPS_PWRSAVE) || defined(CONFIG_BCM_DDR_SELF_REFRESH_PWRSAVE)
+extern void BcmPwrMngtCheckWaitCount(void);
+#endif
+
 /*
  * The SMTC Kernel for the 34K, 1004K, et. al. replaces several
  * of these routines with SMTC-specific variants.
@@ -75,6 +79,9 @@ irqreturn_t c0_compare_interrupt(int irq, void *dev_id)
 	}
 
 out:
+#if defined(CONFIG_BCM_HOSTMIPS_PWRSAVE) || defined(CONFIG_BCM_DDR_SELF_REFRESH_PWRSAVE)
+		BcmPwrMngtCheckWaitCount();
+#endif
 	return IRQ_HANDLED;
 }
 
@@ -159,7 +166,6 @@ int c0_compare_int_usable(void)
 }
 
 #ifndef CONFIG_MIPS_MT_SMTC
-
 int __cpuinit r4k_clockevent_init(void)
 {
 	uint64_t mips_freq = mips_hpt_frequency;
@@ -208,8 +214,8 @@ int __cpuinit r4k_clockevent_init(void)
 	cp0_timer_irq_installed = 1;
 
 	setup_irq(irq, &c0_compare_irqaction);
-
 	return 0;
 }
 
 #endif /* Not CONFIG_MIPS_MT_SMTC */
+

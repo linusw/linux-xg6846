@@ -31,6 +31,17 @@
 #include "vlanproc.h"
 #include <linux/if_vlan.h>
 
+#ifdef CONFIG_MIPS_BRCM
+#include <linux/blog.h>
+struct net_device_stats *vlan_dev_get_stats(struct net_device *dev);
+#ifdef CONFIG_BLOG
+extern struct net_device_stats * vlan_dev_collect_stats(struct net_device * dev_p);
+extern void vlan_dev_update_stats(struct net_device * dev_p, BlogStats_t *blogStats_p);
+extern void vlan_dev_clear_stats(struct net_device * dev_p);
+#endif
+#endif
+
+
 /*
  *	Rebuild the Ethernet MAC header. This is called after an ARP
  *	(or in future other address resolution) has completed on this
@@ -524,6 +535,36 @@ out:
 	return 0;
 }
 
+#if defined(CONFIG_MIPS_BRCM)
+int vlan_dev_set_nfmark_to_priority(char *dev_name, int nfmark_to_priority)
+{
+	struct net_device *dev = dev_get_by_name(&init_net, dev_name);
+
+	if (dev) {
+        if (dev->priv_flags & IFF_802_1Q_VLAN) {
+            if (nfmark_to_priority>=-1 && nfmark_to_priority <=29) {
+                vlan_dev_info(dev)->nfmark_to_priority = nfmark_to_priority;
+                dev_put(dev);
+                return 0;
+            }
+            else {
+    		    printk("invalid nfmark_to_priority\n");
+            }
+        }
+        else {
+            printk(KERN_ERR 
+             "%s: %s is not a vlan device, priv_flags: %hX.\n",
+            __FUNCTION__, dev->name, dev->priv_flags);
+        }    
+    }
+    else {
+		printk(KERN_ERR  "%s: Could not find device: %s\n", __FUNCTION__, dev_name);
+    }
+    dev_put(dev);
+    return -EINVAL;
+}
+#endif
+
 static int vlan_dev_ioctl(struct net_device *dev, struct ifreq *ifr, int cmd)
 {
 	struct net_device *real_dev = vlan_dev_info(dev)->real_dev;
@@ -733,6 +774,12 @@ static const struct net_device_ops vlan_netdev_ops = {
 	.ndo_change_rx_flags	= vlan_dev_change_rx_flags,
 	.ndo_do_ioctl		= vlan_dev_ioctl,
 	.ndo_neigh_setup	= vlan_dev_neigh_setup,
+#if defined(CONFIG_MIPS_BRCM) && defined(CONFIG_BLOG)
+	.ndo_get_stats = vlan_dev_collect_stats,
+#else
+	.ndo_get_stats = vlan_dev_get_stats,
+#endif
+	
 };
 
 static const struct net_device_ops vlan_netdev_accel_ops = {
@@ -749,7 +796,14 @@ static const struct net_device_ops vlan_netdev_accel_ops = {
 	.ndo_change_rx_flags	= vlan_dev_change_rx_flags,
 	.ndo_do_ioctl		= vlan_dev_ioctl,
 	.ndo_neigh_setup	= vlan_dev_neigh_setup,
+#if defined(CONFIG_MIPS_BRCM) && defined(CONFIG_BLOG)
+	.ndo_get_stats = vlan_dev_collect_stats,
+#else
+	.ndo_get_stats = vlan_dev_get_stats,
+#endif
 };
+
+
 
 void vlan_setup(struct net_device *dev)
 {
@@ -762,5 +816,9 @@ void vlan_setup(struct net_device *dev)
 	dev->destructor		= free_netdev;
 	dev->ethtool_ops	= &vlan_ethtool_ops;
 
+#if defined(CONFIG_MIPS_BRCM) && defined(CONFIG_BLOG)
+	dev->put_stats = vlan_dev_update_stats;
+	dev->clr_stats = vlan_dev_clear_stats;
+#endif
 	memset(dev->broadcast, 0, ETH_ALEN);
 }

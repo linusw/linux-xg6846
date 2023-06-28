@@ -10,6 +10,8 @@
 #include <linux/timex.h>
 #include <linux/smp.h>
 
+#if !defined(CONFIG_BRCM_IKOS)
+
 unsigned long lpj_fine;
 unsigned long preset_lpj;
 static int __init lpj_setup(char *str)
@@ -174,3 +176,16 @@ void __cpuinit calibrate_delay(void)
 			loops_per_jiffy/(500000/HZ),
 			(loops_per_jiffy/(5000/HZ)) % 100, loops_per_jiffy);
 }
+
+#else
+
+void __cpuinit calibrate_delay(void)
+{
+	printk("IKOS bypassing delay loop calibration, using ");
+	loops_per_jiffy = 500000;
+	printk("%lu.%02lu BogoMIPS\n",
+		loops_per_jiffy/(500000/HZ),
+		(loops_per_jiffy/(5000/HZ)) % 100);
+}
+#endif
+

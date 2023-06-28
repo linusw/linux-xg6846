@@ -16,6 +16,12 @@
 #include <linux/netdevice.h>
 #include <linux/if_bridge.h>
 #include <net/route.h>
+#if defined(CONFIG_MIPS_BRCM) && defined(CONFIG_BR_IGMP_SNOOP)
+#include <linux/igmp.h>
+#include <linux/in.h>
+#include <linux/blog.h>
+#include <linux/ktime.h>
+#endif
 
 #define BR_HASH_BITS 8
 #define BR_HASH_SIZE (1 << BR_HASH_BITS)
@@ -26,6 +32,8 @@
 #define BR_MAX_PORTS	(1<<BR_PORT_BITS)
 
 #define BR_VERSION	"2.3"
+
+#define BR_MAX_FDB_ENTRIES 4096
 
 /* Path to usermode spanning tree program */
 #define BR_STP_PROG	"/sbin/bridge-stp"
@@ -48,35 +56,53 @@ struct mac_addr
 struct net_bridge_fdb_entry
 {
 	struct hlist_node		hlist;
-	struct net_bridge_port		*dst;
-
+	struct net_bridge_port *dst;
 	struct rcu_head			rcu;
-	atomic_t			use_count;
+	atomic_t                use_count;
 	unsigned long			ageing_timer;
-	mac_addr			addr;
+	mac_addr                addr;
 	unsigned char			is_local;
 	unsigned char			is_static;
 };
+
+#if defined(CONFIG_MIPS_BRCM)
+struct br_blog_rule_id
+{
+   u32                     id;
+   struct br_blog_rule_id *next_p;
+};
+
+struct br_flow_path
+{
+   struct net_device       *rxDev_p;   ////*txDev_p;
+   struct br_blog_rule_id  *blogRuleId_p;
+   struct br_flow_path     *next_p;
+};
+#endif
 
 struct net_bridge_port
 {
 	struct net_bridge		*br;
 	struct net_device		*dev;
 	struct list_head		list;
-
 	/* STP */
-	u8				priority;
-	u8				state;
-	u16				port_no;
+	u8                      priority;
+	u8                      state;
+	u16                     port_no;
 	unsigned char			topology_change_ack;
 	unsigned char			config_pending;
-	port_id				port_id;
-	port_id				designated_port;
-	bridge_id			designated_root;
-	bridge_id			designated_bridge;
-	u32				path_cost;
-	u32				designated_cost;
-
+	port_id                 port_id;
+	port_id                 designated_port;
+	bridge_id               designated_root;
+	bridge_id               designated_bridge;
+	u32                     path_cost;
+	u32                     designated_cost;
+#if defined(CONFIG_MIPS_BRCM) /* && (defined(CONFIG_BR_IGMP_SNOOP) || defined(CONFIG_BR_MLD_SNOOP)) */
+#if defined(CONFIG_BR_IGMP_SNOOP) || defined(CONFIG_BR_MLD_SNOOP)
+	int                  dirty;
+#endif
+   struct br_flow_path  *flowPath_p;
+#endif
 	struct timer_list		forward_delay_timer;
 	struct timer_list		hold_timer;
 	struct timer_list		message_age_timer;
@@ -86,10 +112,15 @@ struct net_bridge_port
 
 struct net_bridge
 {
-	spinlock_t			lock;
+	spinlock_t              lock;
 	struct list_head		port_list;
 	struct net_device		*dev;
-	spinlock_t			hash_lock;
+	struct net_device_stats statistics;
+#ifdef CONFIG_BLOG
+	BlogStats_t bstats; /* stats when the blog promiscuous layer has consumed packets */
+	struct net_device_stats cstats; /* Cummulative Device stats (rx-bytes, tx-pkts, etc...) */
+#endif
+	spinlock_t              hash_lock;
 	struct hlist_head		hash[BR_HASH_SIZE];
 	struct list_head		age_list;
 	unsigned long			feature_mask;
@@ -99,10 +130,39 @@ struct net_bridge
 	unsigned long			flags;
 #define BR_SET_MAC_ADDR		0x00000001
 
+#if defined(CONFIG_MIPS_BRCM)
+	int                     num_fdb_entries;
+#endif /* CONFIG_MIPS_BRCM */
+
+#if defined(CONFIG_MIPS_BRCM)
+#if defined(CONFIG_BR_IGMP_SNOOP)
+	struct list_head		mc_list;
+	struct timer_list 		igmp_timer;
+	int                     igmp_proxy;
+	int                     igmp_snooping;
+	spinlock_t              mcl_lock;
+	int                     start_timer;
+#endif
+   /* for igmp packet rate limit */
+   unsigned int            igmp_rate_limit;
+   unsigned int            igmp_rate_bucket;
+   ktime_t                 igmp_rate_last_packet;
+   unsigned int            igmp_rate_rem_time;
+#endif
+
+#if defined(CONFIG_MIPS_BRCM) && defined(CONFIG_BR_MLD_SNOOP)
+	struct list_head		mld_mc_list;
+	struct timer_list 		mld_timer;
+	int                     mld_proxy;
+	int                     mld_snooping;
+	spinlock_t              mld_mcl_lock;
+	int                     mld_start_timer;
+#endif
+
 	/* STP */
-	bridge_id			designated_root;
-	bridge_id			bridge_id;
-	u32				root_path_cost;
+	bridge_id               designated_root;
+	bridge_id               bridge_id;
+	u32                     root_path_cost;
 	unsigned long			max_age;
 	unsigned long			hello_time;
 	unsigned long			forward_delay;
@@ -111,8 +171,8 @@ struct net_bridge
 	unsigned long			bridge_hello_time;
 	unsigned long			bridge_forward_delay;
 
-	u8				group_addr[ETH_ALEN];
-	u16				root_port;
+	u8                      group_addr[ETH_ALEN];
+	u16                     root_port;
 
 	enum {
 		BR_NO_STP, 		/* no spanning tree */
@@ -130,6 +190,15 @@ struct net_bridge
 	struct kobject			*ifobj;
 };
 
+#if defined(CONFIG_MIPS_BRCM) && (defined(CONFIG_BR_IGMP_SNOOP) || defined(CONFIG_BR_MLD_SNOOP))
+/* these definisions are also there igmprt/hmld.h */
+#define SNOOP_IN_ADD		1
+#define SNOOP_IN_CLEAR		2
+#define SNOOP_EX_ADD		3
+#define SNOOP_EX_CLEAR		4
+#endif
+
+
 extern struct notifier_block br_device_notifier;
 extern const u8 br_group_address[ETH_ALEN];
 
@@ -138,6 +207,7 @@ static inline int br_is_root_bridge(const struct net_bridge *br)
 {
 	return !memcmp(&br->bridge_id, &br->designated_root, 8);
 }
+
 
 /* br_device.c */
 extern void br_dev_setup(struct net_device *dev);
@@ -221,7 +291,7 @@ extern void br_stp_disable_bridge(struct net_bridge *br);
 extern void br_stp_set_enabled(struct net_bridge *br, unsigned long val);
 extern void br_stp_enable_port(struct net_bridge_port *p);
 extern void br_stp_disable_port(struct net_bridge_port *p);
-extern void br_stp_recalculate_bridge_id(struct net_bridge *br);
+extern bool br_stp_recalculate_bridge_id(struct net_bridge *br);
 extern void br_stp_change_bridge_id(struct net_bridge *br, const unsigned char *a);
 extern void br_stp_set_bridge_priority(struct net_bridge *br,
 				       u16 newprio);

@@ -27,6 +27,7 @@
 #include <net/checksum.h>
 #include <linux/rcupdate.h>
 #include <linux/dmaengine.h>
+#include <linux/blog.h>
 #include <linux/hrtimer.h>
 
 /* Don't change this without changing skb_csum_unnecessary! */
@@ -43,6 +44,7 @@
 	SKB_WITH_OVERHEAD((PAGE_SIZE << (ORDER)) - (X))
 #define SKB_MAX_HEAD(X)		(SKB_MAX_ORDER((X), 0))
 #define SKB_MAX_ALLOC		(SKB_MAX_ORDER(0, 2))
+
 
 /* A. Checksumming of received packets by device.
  *
@@ -93,6 +95,37 @@
 struct net_device;
 struct scatterlist;
 struct pipe_inode_info;
+
+#if defined(CONFIG_MIPS_BRCM)
+
+struct blog_t;					/* defined(CONFIG_BLOG) */
+
+typedef void (*RecycleFuncP)(void * nbuff_p, unsigned context, unsigned flags);
+#define SKB_DATA_RECYCLE          (1<<0)
+#define SKB_RECYCLE               (1<<1)
+#define SKB_DATA_NO_RECYCLE       (~SKB_DATA_RECYCLE)        /* to mask out */
+#define SKB_NO_RECYCLE            (~SKB_RECYCLE)             /* to mask out */
+
+extern void skb_frag_xmit(struct sk_buff *origskb, struct net_device *txdev,
+                          uint32_t is_pppoe, uint32_t minMtu, void *ip_p);
+extern struct sk_buff * skb_xlate(struct fkbuff * fkb_p);
+extern struct sk_buff * skb_xlate_dp(struct fkbuff * fkb_p, uint8_t *dirty_p);
+extern unsigned int skb_avail_headroom(const struct sk_buff *skb);
+
+#if defined(CONFIG_BCM_VLAN) || defined(CONFIG_BCM_VLAN_MODULE)
+#define SKB_VLAN_MAX_TAGS   4
+#endif
+
+#define CONFIG_SKBSHINFO_HAS_DIRTYP  1
+#define SKBSHINFO_DIRTYP_ACK         0x20000000
+#define IS_SKBSHINFO_DIRTYP_ACK(d)  (0xa0000000 == (0xf0000000 & (uint32)(d)))
+#define SET_SKBSHINFO_DIRTYP_ACK(d) do { \
+              (d) = (uint8 *) (SKBSHINFO_DIRTYP_ACK | (uint32)(d));} while (0)
+#define CLR_SKBSHINFO_DIRTYP_ACK(d) do { \
+              (d) = (uint8 *) (~SKBSHINFO_DIRTYP_ACK & (uint32)(d));} while (0)
+
+#endif	/* defined(CONFIG_MIPS_BRCM) */
+
 
 #if defined(CONFIG_NF_CONNTRACK) || defined(CONFIG_NF_CONNTRACK_MODULE)
 struct nf_conntrack {
@@ -187,6 +220,11 @@ union skb_shared_tx {
  */
 struct skb_shared_info {
 	atomic_t	dataref;
+#ifdef CONFIG_MIPS_BRCM
+	/* to preserve compat with binary only modules, do not change the
+	 * position of this field relative to the start of the structure. */
+	__u8 *dirty_p;
+#endif
 	unsigned short	nr_frags;
 	unsigned short	gso_size;
 	/* Warning: this field is not always filled in (UFO)! */
@@ -314,10 +352,65 @@ struct sk_buff {
 	/* These two members must be first. */
 	struct sk_buff		*next;
 	struct sk_buff		*prev;
+	struct net_device	*dev;
+	void			(*destructor)(struct sk_buff *skb);
+
+#if defined(CONFIG_MIPS_BRCM) // BRCM change Begin
+
+	/*
+	 * Several skb fields have been regrouped together for better data locality
+	 * cache performance, 16byte cache line proximity.
+	 */
+
+/*--- members common to fkbuff: begin here ---*/
+	union {
+		void 			* fkbInSkb;		/* see fkb_in_skb_test() */
+		struct sk_buff_head *list;
+	};		/* ____cacheline_aligned */
+	struct blog_t		*blog_p;	/* defined(CONFIG_BLOG), use blog_ptr() */
+	unsigned char		*data;
+	unsigned int		len;
+
+	unsigned int		mark;
+	unsigned int		priority;
+	RecycleFuncP		recycle_hook;	/* Recycle preallocated skb or data */
+	union {
+		unsigned int	recycle_context;
+		struct sk_buff	*next_free;
+	};
+/*--- members common to fkbuff: end here ---*/
+
+
+	unsigned int		recycle_flags;	/* 3 bytes unused */
+	sk_buff_data_t		tail;
+	sk_buff_data_t		end;
+	unsigned char		*head;
+
+
+	atomic_t			users;
+	struct nf_conntrack	*nfct;			/* CONFIG_NETFILTER */
+	struct sk_buff		*nfct_reasm;	/* CONFIG_NF_CONNTRACK MODULE*/
+
+
+	unsigned short		queue_mapping;
+	unsigned short		vlan_tci;
+	union {
+		unsigned int	vtag_word;
+		struct 		{ unsigned short vtag, vtag_save; };
+	};
+	union {								/* CONFIG_NET_SCHED CONFIG_NET_CLS_ACT*/
+		unsigned int	tc_word;
+		struct		{ unsigned short tc_index, tc_verd; };
+	};
+
+	sk_buff_data_t		transport_header;
+	sk_buff_data_t		network_header;
+	sk_buff_data_t		mac_header;
+	int					iif;
+#endif // defined(CONFIG_MIPS_BRCM)BRCM change End
 
 	struct sock		*sk;
 	ktime_t			tstamp;
-	struct net_device	*dev;
 
 	union {
 		struct  dst_entry	*dst;
@@ -334,8 +427,7 @@ struct sk_buff {
 	 */
 	char			cb[48];
 
-	unsigned int		len,
-				data_len;
+	unsigned int		data_len;
 	__u16			mac_len,
 				hdr_len;
 	union {
@@ -345,7 +437,6 @@ struct sk_buff {
 			__u16	csum_offset;
 		};
 	};
-	__u32			priority;
 	__u8			local_df:1,
 				cloned:1,
 				ip_summed:2,
@@ -358,23 +449,10 @@ struct sk_buff {
 				nf_trace:1;
 	__be16			protocol;
 
-	void			(*destructor)(struct sk_buff *skb);
-#if defined(CONFIG_NF_CONNTRACK) || defined(CONFIG_NF_CONNTRACK_MODULE)
-	struct nf_conntrack	*nfct;
-	struct sk_buff		*nfct_reasm;
-#endif
 #ifdef CONFIG_BRIDGE_NETFILTER
 	struct nf_bridge_info	*nf_bridge;
 #endif
 
-	int			iif;
-	__u16			queue_mapping;
-#ifdef CONFIG_NET_SCHED
-	__u16			tc_index;	/* traffic control index */
-#ifdef CONFIG_NET_CLS_ACT
-	__u16			tc_verd;	/* traffic control verdict */
-#endif
-#endif
 #ifdef CONFIG_IPV6_NDISC_NODETYPE
 	__u8			ndisc_nodetype:2;
 #endif
@@ -391,20 +469,20 @@ struct sk_buff {
 	__u32			secmark;
 #endif
 
-	__u32			mark;
+#if defined(CONFIG_MIPS_BRCM)
+#if defined(CONFIG_BCM_VLAN) || defined(CONFIG_BCM_VLAN_MODULE)
+        __u16 vlan_count;
+        __u16 vlan_tpid;
+        __u32 vlan_header[SKB_VLAN_MAX_TAGS];
+	     struct net_device	*rxdev;
+#endif
+#endif /* CONFIG_MIPS_BRCM */
 
-	__u16			vlan_tci;
+	/*---------- Add any custom fields below this line ----------*/
+	
+	/* truesize must be at the end, see alloc_skb() for details.  */
+	unsigned int    truesize;
 
-	sk_buff_data_t		transport_header;
-	sk_buff_data_t		network_header;
-	sk_buff_data_t		mac_header;
-	/* These elements must be at the end, see alloc_skb() for details.  */
-	sk_buff_data_t		tail;
-	sk_buff_data_t		end;
-	unsigned char		*head,
-				*data;
-	unsigned int		truesize;
-	atomic_t		users;
 };
 
 #ifdef __KERNEL__
@@ -521,6 +599,44 @@ static inline union skb_shared_tx *skb_tx(struct sk_buff *skb)
 {
 	return &skb_shinfo(skb)->tx_flags;
 }
+
+
+#if defined(CONFIG_MIPS_BRCM)
+/* Returns size of struct sk_buff */
+extern size_t skb_size(void);
+extern size_t skb_aligned_size(void);
+extern int skb_layout_test(int head_offset, int tail_offset, int end_offset);
+
+/**
+ *	skb_headerinit	-	initialize a socket buffer header
+ *	@headroom: reserved headroom size
+ *	@datalen: data buffer size, data buffer is allocated by caller
+ *	@skb: skb allocated by caller
+ *	@data: data buffer allocated by caller
+ *	@recycle_hook: callback function to free data buffer and skb
+ *	@recycle_context: context value passed to recycle_hook, param1
+ *  @blog_p: pass a blog to a skb for logging
+ *
+ *	Initializes the socket buffer and assigns the data buffer to it.
+ *	Both the sk_buff and the pointed data buffer are pre-allocated.
+ *
+ */
+void skb_headerinit(unsigned int headroom, unsigned int datalen,
+					struct sk_buff *skb, unsigned char *data,
+					RecycleFuncP recycle_hook, unsigned int recycle_context,
+					struct blog_t * blog_p);
+
+/* Wrapper function to skb_headerinit() with no Blog association */
+static inline void skb_hdrinit( unsigned int headroom, unsigned int datalen,
+								struct sk_buff *skb, unsigned char * data,
+								RecycleFuncP recycle_hook,
+								unsigned int recycle_context)
+{
+	skb_headerinit(headroom, datalen, skb, data, recycle_hook, recycle_context,
+					(struct blog_t *)NULL);	/* No associated Blog object */
+}
+
+#endif  /* defined(CONFIG_MIPS_BRCM) */
 
 /**
  *	skb_queue_empty - check if a queue is empty

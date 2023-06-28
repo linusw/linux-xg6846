@@ -16,6 +16,14 @@
 #define LKC_DIRECT_LINK
 #include "lkc.h"
 
+// CONFIG_MIPS_BRCM begin: fix compiler warning
+// This underscore stuff is for internationalization, defined in lkc.h but
+// I guess our compiler does not like a static inline function being passed
+// as an arg to printf.  So define basically the same thing here.
+#undef _
+#define _(text) (text)
+// CONFIG_MIPS_BRCM end
+
 static void conf(struct menu *menu);
 static void check_conf(struct menu *menu);
 
@@ -102,7 +110,14 @@ static int conf_askvalue(struct symbol *sym, const char *def)
 		check_stdin();
 	case ask_all:
 		fflush(stdout);
-		fgets(line, 128, stdin);
+		if (NULL == fgets(line, 128, stdin)) {  //BRCM: check ret val to fix compiler warning
+			printf("fgets failed, exiting\n");
+			exit(2);
+		}
+		if (feof(stdin)) {
+			printf("\nEOF on std input -- exiting\n");
+			exit(2);
+		}
 		return 1;
 	default:
 		break;
@@ -156,14 +171,14 @@ int conf_string(struct menu *menu)
 static int conf_sym(struct menu *menu)
 {
 	struct symbol *sym = menu->sym;
-	int type;
+	// int type;  backported future linux patch to 2.6.30 to fix gcc4.6 compiler warning
 	tristate oldval, newval;
 
 	while (1) {
 		printf("%*s%s ", indent - 1, "", _(menu->prompt->text));
 		if (sym->name)
 			printf("(%s) ", sym->name);
-		type = sym_get_type(sym);
+		// type = sym_get_type(sym); see backport comment above
 		putchar('[');
 		oldval = sym_get_tristate_value(sym);
 		switch (oldval) {
@@ -228,11 +243,11 @@ static int conf_choice(struct menu *menu)
 {
 	struct symbol *sym, *def_sym;
 	struct menu *child;
-	int type;
+	// int type; backported future linux patch to 2.6.30 to fix gcc4.6 compiler warning
 	bool is_new;
 
 	sym = menu->sym;
-	type = sym_get_type(sym);
+	// type = sym_get_type(sym); see backported comment above
 	is_new = !sym_has_value(sym);
 	if (sym_is_changable(sym)) {
 		conf_sym(menu);
@@ -304,7 +319,10 @@ static int conf_choice(struct menu *menu)
 			check_stdin();
 		case ask_all:
 			fflush(stdout);
-			fgets(line, 128, stdin);
+			if (NULL == fgets(line, 128, stdin)) { //BRCM: check ret val to fix compiler warning
+				printf("fgets failed, exiting\n");
+				exit(2);
+			}
 			strip(line);
 			if (line[0] == '?') {
 				printf("\n%s\n", get_help(menu));

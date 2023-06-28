@@ -17,6 +17,10 @@
 
 unsigned int vced_count, vcei_count;
 
+#if defined(CONFIG_MIPS_BRCM)
+extern unsigned int unaligned_instructions;
+#endif
+
 static int show_cpuinfo(struct seq_file *m, void *v)
 {
 	unsigned long n = (unsigned long) v - 1;
@@ -78,6 +82,10 @@ static int show_cpuinfo(struct seq_file *m, void *v)
 	seq_printf(m, fmt, 'D', vced_count);
 	seq_printf(m, fmt, 'I', vcei_count);
 	seq_printf(m, "\n");
+
+#if defined(CONFIG_MIPS_BRCM)
+	seq_printf(m, "unaligned exceptions\t\t: %d\n", unaligned_instructions);
+#endif
 
 	return 0;
 }

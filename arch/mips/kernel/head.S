@@ -192,6 +192,7 @@ NESTED(kernel_entry, 16, sp)			# kernel entry point
 	PTR_ADDU	sp, $28
 	set_saved_sp	sp, t0, t1
 	PTR_SUBU	sp, 4 * SZREG		# init stack pointer
+	addiu		sp, -1024
 
 	j		start_kernel
 	END(kernel_entry)

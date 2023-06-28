@@ -110,11 +110,13 @@ int show_interrupts(struct seq_file *p, void *v)
 		for_each_online_cpu(j)
 			seq_printf(p, "%10u ", kstat_irqs_cpu(i, j));
 #endif
-		seq_printf(p, " %14s", irq_desc[i].chip->name);
-		seq_printf(p, "  %s", action->name);
+		// CONFIG_MIPS_BRCM: increased width of chip name and print
+		// irqaction->flags
+		seq_printf(p, " %-20s", irq_desc[i].chip->name);
+		seq_printf(p, "  %s(0x%lx)", action->name, action->flags);
 
 		for (action=action->next; action; action = action->next)
-			seq_printf(p, ", %s", action->name);
+			seq_printf(p, ", %s(0x%lx)", action->name, action->flags);
 
 		seq_putc(p, '\n');
 skip:

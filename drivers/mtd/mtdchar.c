@@ -182,6 +182,7 @@ static ssize_t mtd_read(struct file *file, char __user *buf, size_t count,loff_t
 		case MTD_MODE_RAW:
 		{
 			struct mtd_oob_ops ops;
+            memset(&ops, 0x00, sizeof(ops));  /* XAVI, from 4.12L.08 */
 
 			ops.mode = MTD_OOB_RAW;
 			ops.datbuf = kbuf;
@@ -285,6 +286,7 @@ static ssize_t mtd_write(struct file *file, const char __user *buf, size_t count
 		case MTD_MODE_RAW:
 		{
 			struct mtd_oob_ops ops;
+            memset(&ops, 0x00, sizeof(ops));  /* XAVI, from 4.12L.08 */
 
 			ops.mode = MTD_OOB_RAW;
 			ops.datbuf = kbuf;
@@ -478,6 +480,9 @@ static int mtd_ioctl(struct inode *inode, struct file *file,
 		struct mtd_oob_buf __user *user_buf = argp;
 	        uint32_t retlen;
 
+        memset(&ops, 0x00, sizeof(ops));  /* XAVI, from 4.12L.08 */
+        memset(&buf, 0x00, sizeof(buf));  /* XAVI, from 4.12L.08 */
+        
 		if(!(file->f_mode & FMODE_WRITE))
 			return -EPERM;
 
@@ -499,7 +504,11 @@ static int mtd_ioctl(struct inode *inode, struct file *file,
 		ops.ooblen = buf.length;
 		ops.ooboffs = buf.start & (mtd->oobsize - 1);
 		ops.datbuf = NULL;
+#if defined(CONFIG_MIPS_BRCM)
+		ops.mode = MTD_OOB_AUTO;
+#else
 		ops.mode = MTD_OOB_PLACE;
+#endif
 
 		if (ops.ooboffs && ops.ooblen > (mtd->oobsize - ops.ooboffs))
 			return -EINVAL;
@@ -532,6 +541,9 @@ static int mtd_ioctl(struct inode *inode, struct file *file,
 		struct mtd_oob_buf buf;
 		struct mtd_oob_ops ops;
 
+        memset(&ops, 0x00, sizeof(ops));   /* XAVI, from 4.12L.08 */
+        memset(&buf, 0x00, sizeof(buf));   /* XAVI, from 4.12L.08 */
+
 		if (copy_from_user(&buf, argp, sizeof(struct mtd_oob_buf)))
 			return -EFAULT;
 
@@ -549,7 +561,12 @@ static int mtd_ioctl(struct inode *inode, struct file *file,
 		ops.ooblen = buf.length;
 		ops.ooboffs = buf.start & (mtd->oobsize - 1);
 		ops.datbuf = NULL;
+#if defined(CONFIG_MIPS_BRCM)
+        ops.len = 0;
+		ops.mode = MTD_OOB_AUTO;
+#else
 		ops.mode = MTD_OOB_PLACE;
+#endif
 
 		if (ops.ooboffs && ops.ooblen > (mtd->oobsize - ops.ooboffs))
 			return -EINVAL;
@@ -561,7 +578,8 @@ static int mtd_ioctl(struct inode *inode, struct file *file,
 		buf.start &= ~(mtd->oobsize - 1);
 		ret = mtd->read_oob(mtd, buf.start, &ops);
 
-		if (put_user(ops.oobretlen, (uint32_t __user *)argp))
+		if (put_user(ops.oobretlen, (uint32_t __user *)(argp +
+            offsetof(struct mtd_oob_buf, length))))
 			ret = -EFAULT;
 		else if (ops.oobretlen && copy_to_user(buf.ptr, ops.oobbuf,
 						    ops.oobretlen))

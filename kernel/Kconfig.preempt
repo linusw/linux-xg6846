@@ -52,3 +52,12 @@ config PREEMPT
 
 endchoice
 
+config PREEMPT_SOFTIRQS
+	bool "Make softirq preemptable - process softirq tasks in ksoftird thead context"
+	default y
+
+# Begin Broadcom changed code.
+config BRCM_SOFTIRQ_BASE_RT_PRIO
+	int "[Brcm] Base (realtime) priority for network tasks, etc."
+	default "5"
+# End Broadcom changed code.

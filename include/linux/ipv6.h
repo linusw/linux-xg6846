@@ -122,7 +122,7 @@ struct ipv6hdr {
 
 	struct	in6_addr	saddr;
 	struct	in6_addr	daddr;
-};
+} LINUX_NET_PACKED;
 
 #ifdef __KERNEL__
 /*

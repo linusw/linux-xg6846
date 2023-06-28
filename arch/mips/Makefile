@@ -48,7 +48,19 @@ ifneq ($(SUBARCH),$(ARCH))
   endif
 endif
 
-cflags-y := -ffunction-sections
+# CONFIG_MIPS_BRCM Begin Broadcom changed code.
+# removing -ffunction-sections from clfags-y
+cflags-y :=
+# CONFIG_MIPS_BRCM End Broadcom changed code.
+
+ifdef CONFIG_FUNCTION_GRAPH_TRACER
+  ifndef KBUILD_MCOUNT_RA_ADDRESS
+    ifeq ($(call cc-option-yn,-mmcount-ra-address), y)
+      cflags-y += -mmcount-ra-address -DKBUILD_MCOUNT_RA_ADDRESS
+    endif
+  endif
+endif
+
 cflags-y += $(call cc-option, -mno-check-zero-division)
 
 ifdef CONFIG_32BIT
@@ -87,6 +99,13 @@ MODFLAGS			+= -mlong-calls
 
 cflags-y += -ffreestanding
 
+# CONFIG_MIPS_BRCM Begin Broadcom changed code.
+ifeq ($(strip $(JTAG_KERNEL_DEBUG)),y)
+  cflags-y += -g
+  CFLAGS := $(CFLAGS) -g
+endif
+# CONFIG_MIPS_BRCM End Broadcom changed code.
+
 #
 # We explicitly add the endianness specifier if needed, this allows
 # to compile kernels with a toolchain for the other endianness. We
@@ -109,6 +128,13 @@ cflags-$(CONFIG_CPU_HAS_SMARTMIPS)	+= $(call cc-option,-msmartmips)
 
 cflags-$(CONFIG_SB1XXX_CORELIS)	+= $(call cc-option,-mno-sched-prolog) \
 				   -fno-omit-frame-pointer
+
+
+# CONFIG_MIPS_BRCM Begin Broadcom changed code.
+ifdef CONFIG_MIPS_BRCM 
+cflags-$(CONFIG_REMOTE_DEBUG)	+= -ggdb
+endif
+# CONFIG_MIPS_BRCM End Broadcom changed code.
 
 #
 # CPU-dependent compiler/assembler options for optimization.
@@ -549,6 +575,15 @@ load-$(CONFIG_SIBYTE_BIGSUR)	:= 0xffffffff80100000
 core-$(CONFIG_BCM47XX)		+= arch/mips/bcm47xx/
 cflags-$(CONFIG_BCM47XX)	+= -I$(srctree)/arch/mips/include/asm/mach-bcm47xx
 load-$(CONFIG_BCM47XX)		:= 0xffffffff80001000
+
+#
+# Broadcom BCM693XX boards
+#
+core-$(CONFIG_MIPS_BRCM)	+= arch/mips/bcm963xx/
+cflags-$(CONFIG_MIPS_BRCM)	+= -I$(srctree)/arch/mips/include/asm/mach-bcm963xx
+#cflags-$(CONFIG_MIPS_BRCM)	+= -I$(srctree)/arch/mips/include/asm/bcm963xx
+load-$(CONFIG_MIPS_BRCM)	:= 0x80010000
+core-$(CONFIG_MIPS_BRCM)	+= arch/mips/bcm963xx/ktools/
 
 #
 # SNI RM

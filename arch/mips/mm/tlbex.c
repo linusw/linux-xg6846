@@ -270,6 +270,9 @@ static void __cpuinit build_tlb_write_entry(u32 **p, struct uasm_label **l,
 	case CPU_R4400PC:
 	case CPU_R4400SC:
 	case CPU_R4400MC:
+#if defined(CONFIG_MIPS_BRCM)
+	case CPU_BMIPS4350:
+#endif
 		/*
 		 * This branch uses up a mtc0 hazard nop slot and saves
 		 * two nops after the tlbw instruction.
@@ -516,6 +519,7 @@ build_get_pgd_vmalloc64(u32 **p, struct uasm_label **l, struct uasm_reloc **r,
 
 #else /* !CONFIG_64BIT */
 
+
 /*
  * TMP and PTR are scratch.
  * TMP will be clobbered, PTR will hold the pgd entry.
@@ -673,6 +677,7 @@ static void __cpuinit build_r4000_tlb_refill_handler(void)
 		uasm_il_bnez(&p, &r, K0, label_leave);
 		/* No need for uasm_i_nop */
 	}
+
 
 #ifdef CONFIG_64BIT
 	build_get_pmde64(&p, &l, &r, K0, K1); /* get pmd in K1 */

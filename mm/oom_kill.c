@@ -521,32 +521,32 @@ void clear_zonelist_oom(struct zonelist *zonelist, gfp_t gfp_mask)
 static void __out_of_memory(gfp_t gfp_mask, int order)
 {
 	struct task_struct *p;
-	unsigned long points;
+		unsigned long points;
 
 	if (sysctl_oom_kill_allocating_task)
 		if (!oom_kill_process(current, gfp_mask, order, 0, NULL,
 				"Out of memory (oom_kill_allocating_task)"))
 			return;
 retry:
-	/*
-	 * Rambo mode: Shoot down a process and hope it solves whatever
-	 * issues we may have.
-	 */
-	p = select_bad_process(&points, NULL);
+		/*
+		 * Rambo mode: Shoot down a process and hope it solves whatever
+		 * issues we may have.
+		 */
+		p = select_bad_process(&points, NULL);
 
-	if (PTR_ERR(p) == -1UL)
-		return;
+		if (PTR_ERR(p) == -1UL)
+			return;
 
-	/* Found nothing?!?! Either we hang forever, or we panic. */
-	if (!p) {
-		read_unlock(&tasklist_lock);
-		panic("Out of memory and no killable processes...\n");
+		/* Found nothing?!?! Either we hang forever, or we panic. */
+		if (!p) {
+			read_unlock(&tasklist_lock);
+			panic("Out of memory and no killable processes...\n");
+		}
+
+		if (oom_kill_process(p, gfp_mask, order, points, NULL,
+				     "Out of memory"))
+			goto retry;
 	}
-
-	if (oom_kill_process(p, gfp_mask, order, points, NULL,
-			     "Out of memory"))
-		goto retry;
-}
 
 /*
  * pagefault handler calls into here because it is out of memory but
@@ -597,13 +597,53 @@ rest_and_return:
  */
 void out_of_memory(struct zonelist *zonelist, gfp_t gfp_mask, int order)
 {
-	unsigned long freed = 0;
+#if defined (CONFIG_MIPS_BRCM)
+#define OOM_REBOOT_DELAY (5)
+#define OOM_REBOOT_INTERVAL (HZ*120)
+	static int oom_count=0;
+	static unsigned long oom_timestamp=0;
+#else
 	enum oom_constraint constraint;
+#endif
+	unsigned long freed = 0;
 
 	blocking_notifier_call_chain(&oom_notify_list, 0, &freed);
 	if (freed > 0)
 		/* Got some memory back in the last second. */
 		return;
+#if defined (CONFIG_MIPS_BRCM)
+
+	/* For our embedded system, most of the processes are considered essential. */
+	/* Randomly killing a process is no better than a reboot so we won't kill process here*/
+	
+	printk(KERN_WARNING "\n\n%s triggered out of memory codition (oom killer not called): "
+		"gfp_mask=0x%x, order=%d, oomkilladj=%d\n\n",
+		current->comm, gfp_mask, order, current->oomkilladj);
+	dump_stack();
+	show_mem();
+	printk("\n");
+	/*
+	 * The process that triggered the oom is not necessarily the one that
+	 * caused it.  dump_tasks shows all tasks and their memory usage.
+	 */
+	read_lock(&tasklist_lock);
+	dump_tasks(NULL);
+	read_unlock(&tasklist_lock);
+
+	/* Reboot if OOM, but don't do it immediately - just in case this can be too sensitive */
+	if ((jiffies - oom_timestamp) > OOM_REBOOT_INTERVAL) {
+		oom_timestamp = jiffies;
+		oom_count = 0;		
+	}
+	else {
+		oom_count++;
+		if (oom_count >= OOM_REBOOT_DELAY) {
+			panic("Reboot due to persistent out of memory codition..");
+		}
+	}
+	schedule_timeout_interruptible(HZ*5);
+
+#else
 
 	if (sysctl_panic_on_oom == 2)
 		panic("out of memory. Compulsory panic_on_oom is selected.\n");
@@ -638,4 +678,5 @@ void out_of_memory(struct zonelist *zonelist, gfp_t gfp_mask, int order)
 	 */
 	if (!test_thread_flag(TIF_MEMDIE))
 		schedule_timeout_uninterruptible(1);
+#endif
 }

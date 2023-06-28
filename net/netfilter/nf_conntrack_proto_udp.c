@@ -25,8 +25,17 @@
 #include <net/netfilter/ipv4/nf_conntrack_ipv4.h>
 #include <net/netfilter/ipv6/nf_conntrack_ipv6.h>
 
+#if defined(CONFIG_MIPS_BRCM)
+#include <linux/blog.h>
+#endif
+
 static unsigned int nf_ct_udp_timeout __read_mostly = 30*HZ;
+#if defined(CONFIG_MIPS_BRCM) && defined(CONFIG_BLOG)
+/*RFC 4008 */
+#define  nf_ct_udp_timeout_stream  blog_nat_udp_def_idle_timeout
+#else
 static unsigned int nf_ct_udp_timeout_stream __read_mostly = 180*HZ;
+#endif
 
 static bool udp_pkt_to_tuple(const struct sk_buff *skb,
 			     unsigned int dataoff,
@@ -47,7 +56,7 @@ static bool udp_pkt_to_tuple(const struct sk_buff *skb,
 }
 
 static bool udp_invert_tuple(struct nf_conntrack_tuple *tuple,
-			     const struct nf_conntrack_tuple *orig)
+			    const struct nf_conntrack_tuple *orig)
 {
 	tuple->src.u.udp.port = orig->dst.u.udp.port;
 	tuple->dst.u.udp.port = orig->src.u.udp.port;
@@ -74,7 +83,17 @@ static int udp_packet(struct nf_conn *ct,
 	/* If we've seen traffic both ways, this is some kind of UDP
 	   stream.  Extend timeout. */
 	if (test_bit(IPS_SEEN_REPLY_BIT, &ct->status)) {
+#ifdef CONFIG_MIPS_BRCM
+                unsigned timeout = nf_ct_udp_timeout_stream;
+                if (ct->derived_timeout == 0xFFFFFFFF){
+                        timeout = 0xFFFFFFFF - jiffies;
+                } else if(ct->derived_timeout > 0) {
+                        timeout = ct->derived_timeout;
+                }
+                nf_ct_refresh_acct(ct, ctinfo, skb, timeout);
+#else
 		nf_ct_refresh_acct(ct, ctinfo, skb, nf_ct_udp_timeout_stream);
+#endif
 		/* Also, more likely to be important, and not a probe */
 		if (!test_and_set_bit(IPS_ASSURED_BIT, &ct->status))
 			nf_conntrack_event_cache(IPCT_STATUS, ct);
@@ -86,7 +105,7 @@ static int udp_packet(struct nf_conn *ct,
 
 /* Called when a new connection for this protocol found. */
 static bool udp_new(struct nf_conn *ct, const struct sk_buff *skb,
-		    unsigned int dataoff)
+		   unsigned int dataoff)
 {
 	return true;
 }

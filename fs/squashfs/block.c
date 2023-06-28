@@ -39,6 +39,10 @@
 #include "squashfs_fs_i.h"
 #include "squashfs.h"
 
+#ifdef SQUASHFS_LZMA_ENABLE
+extern DEFINE_PER_CPU(struct sqlzma *, sqlzma);
+#endif
+
 /*
  * Read the metadata block length, this is stored in the first two
  * bytes of the metadata block.
@@ -153,6 +157,79 @@ int squashfs_read_data(struct super_block *sb, void **buffer, u64 index,
 	}
 
 	if (compressed) {
+		
+#ifdef SQUASHFS_LZMA_ENABLE
+		int zlib_err = Z_STREAM_END;
+		int start, rest;
+		enum {Src, Dst};
+		struct sized_buf sbuf[2];
+		struct sqlzma *percpu;
+
+		start = k;
+		for (k = 0; k < b; k++) {
+			wait_on_buffer(bh[k]);
+			if (!buffer_uptodate(bh[k]))
+				goto release_mutex;
+		}
+
+		avail = 0;
+		for (k = 0; !avail && k < b; k++) {
+			avail = msblk->devblksize - offset;
+			if (length < avail)
+				avail = length;
+			if (avail)
+				break;
+			offset = 0;
+			brelse(bh[k]);
+		}
+		bytes = 0;
+		if (!avail)
+			goto block_release; // nothing to be process
+
+		start = k;
+		percpu = get_cpu_var(sqlzma);
+#ifdef KeepPreemptive
+		put_cpu_var(sqlzma);
+		mutex_lock(&percpu->mtx);
+#endif
+
+		for (; k < b; k++) {
+			memcpy(percpu->read_data + bytes, bh[k]->b_data + offset,
+			       avail);
+			bytes += avail;
+			offset = 0;
+			brelse(bh[k]);
+			avail = msblk->devblksize - offset;
+			rest = length - bytes;
+			if (rest < avail)
+				avail = rest;
+		}
+
+		//Now we start to decompress
+		sbuf[Src].buf = percpu->read_data;
+		sbuf[Src].sz = bytes;
+		sbuf[Dst].buf = buffer[0];
+		sbuf[Dst].sz = srclength;
+		dpri_un(&percpu->un);
+		dpri("src %d %p, dst %d %p\n", sbuf[Src].sz, sbuf[Src].buf,
+		     sbuf[Dst].sz, sbuf[Dst].buf);
+		zlib_err = sqlzma_un(&percpu->un, sbuf + Src, sbuf + Dst);
+		bytes = percpu->un.un_reslen;
+
+#ifdef KeepPreemptive
+		mutex_unlock(&percpu->mtx);
+#else
+		put_cpu_var(sqlzma);
+#endif
+
+		if (unlikely(zlib_err)) {
+			dpri("zlib_err %d\n", zlib_err);
+ 			goto release_mutex;
+ 		}
+
+		length = bytes;
+
+#else //No LZMA
 		int zlib_err = 0, zlib_init = 0;
 
 		/*
@@ -219,6 +296,7 @@ int squashfs_read_data(struct super_block *sb, void **buffer, u64 index,
 		}
 		length = msblk->stream.total_out;
 		mutex_unlock(&msblk->read_data_mutex);
+#endif		
 	} else {
 		/*
 		 * Block is uncompressed.
@@ -256,7 +334,9 @@ int squashfs_read_data(struct super_block *sb, void **buffer, u64 index,
 	return length;
 
 release_mutex:
+#ifndef SQUASHFS_LZMA_ENABLE
 	mutex_unlock(&msblk->read_data_mutex);
+#endif
 
 block_release:
 	for (; k < b; k++)

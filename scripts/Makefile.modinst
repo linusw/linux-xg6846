@@ -23,7 +23,11 @@ quiet_cmd_modules_install = INSTALL $@
 INSTALL_MOD_DIR ?= extra
 ext-mod-dir = $(INSTALL_MOD_DIR)$(subst $(patsubst %/,%,$(KBUILD_EXTMOD)),,$(@D))
 
-modinst_dir = $(if $(KBUILD_EXTMOD),$(ext-mod-dir),kernel/$(@D))
+# CONFIG_MIPS_BRCM Begin Broadcom changed code	
+# Want to put all brcm modules to "extra" directory
+# modinst_dir = $(if $(KBUILD_EXTMOD),$(ext-mod-dir),kernel/$(@D))
+modinst_dir = $(if $(filter ../% /%,$@),extra/,kernel/$(@D))
+# CONFIG_MIPS_BRCM Begin Broadcom changed code	
 
 $(modules):
 	$(call cmd,modules_install,$(MODLIB)/$(modinst_dir))

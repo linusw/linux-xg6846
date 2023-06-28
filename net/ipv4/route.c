@@ -834,15 +834,15 @@ nofree:
 					 */
 					for (aux = rt_hash_table[i].chain;;) {
 						if (aux == rth) {
-							length += ONE;
+						length += ONE;
 							break;
 						}
 						if (compare_hash_inputs(&aux->fl, &rth->fl))
 							break;
 						aux = aux->u.dst.rt_next;
-					}
-					continue;
 				}
+				continue;
+			}
 			} else if (!rt_may_expire(rth, tmo, ip_rt_gc_timeout))
 				goto nofree;
 
@@ -1191,7 +1191,7 @@ restart:
 		}
 	}
 
-	rt->u.dst.rt_next = rt_hash_table[hash].chain;
+		rt->u.dst.rt_next = rt_hash_table[hash].chain;
 
 #if RT_CACHE_DEBUG >= 2
 	if (rt->u.dst.rt_next) {
@@ -1207,7 +1207,7 @@ restart:
 	 * previous writes to rt are comitted to memory
 	 * before making rt visible to other CPUS.
 	 */
-	rcu_assign_pointer(rt_hash_table[hash].chain, rt);
+		rcu_assign_pointer(rt_hash_table[hash].chain, rt);
 
 	spin_unlock_bh(rt_hash_lock_addr(hash));
 	*rp = rt;
@@ -3400,7 +3400,11 @@ int __init ip_rt_init(void)
 		printk(KERN_ERR "Unable to create route proc files\n");
 #ifdef CONFIG_XFRM
 	xfrm_init();
+#ifdef CONFIG_MIPS_BRCM 
+	xfrm4_init(ip_rt_max_size);
+#else
 	xfrm4_init();
+#endif
 #endif
 	rtnl_register(PF_INET, RTM_GETROUTE, inet_rtm_getroute, NULL);
 

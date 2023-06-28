@@ -67,6 +67,7 @@ static inline int
 ebt_do_watcher(const struct ebt_entry_watcher *w, struct sk_buff *skb,
 	       struct xt_target_param *par)
 {
+
 	par->target   = w->u.watcher;
 	par->targinfo = w->data;
 	w->u.watcher->target(skb, par);
@@ -77,6 +78,7 @@ ebt_do_watcher(const struct ebt_entry_watcher *w, struct sk_buff *skb,
 static inline int ebt_do_match (struct ebt_entry_match *m,
    const struct sk_buff *skb, struct xt_match_param *par)
 {
+
 	par->match     = m->u.match;
 	par->matchinfo = m->data;
 	return m->u.match->match(skb, par) ? EBT_MATCH : EBT_NOMATCH;
